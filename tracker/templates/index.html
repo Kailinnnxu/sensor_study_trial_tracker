@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Participant Touchpoint Tracker</title>
+  <style>
+    :root {
+      --bg: #f5f6f8;
+      --card: #fff;
+      --border: #d8dce3;
+      --text: #1a1d23;
+      --muted: #5c6570;
+      --accent: #1f6feb;
+      --done: #1a7f37;
+      --pending: #9a6700;
+      --review: #cf222e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 2rem;
+      line-height: 1.5;
+    }
+    h1 { margin-top: 0; font-size: 1.75rem; }
+    h2 { font-size: 1.1rem; margin: 2rem 0 1rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.65rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .badge.done { background: #dafbe1; color: var(--done); }
+    .badge.pending { background: #fff8c5; color: var(--pending); }
+    .badge.review { background: #ffebe9; color: var(--review); }
+    form.inline { display: inline; }
+    button, .btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.45rem 0.85rem;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button.secondary {
+      background: #eaeef2;
+      color: var(--text);
+    }
+    button.danger {
+      background: #ffebe9;
+      color: var(--review);
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 0.75rem;
+      align-items: end;
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+    input, select {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.95rem;
+    }
+    .empty {
+      color: var(--muted);
+      font-style: italic;
+    }
+    .offsets {
+      font-family: ui-monospace, monospace;
+      font-size: 0.85rem;
+    }
+    .study-id {
+      font-weight: 700;
+      font-family: ui-monospace, monospace;
+    }
+    pre.preview {
+      white-space: pre-wrap;
+      background: #f6f8fa;
+      padding: 0.75rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      max-height: 8rem;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>Participant Touchpoint Tracker</h1>
+  <p class="muted">Study ID only — no PHI stored in this system.</p>
+
+  <div class="card">
+    <h2>Add anchor event</h2>
+    <form method="post" action="{{ url_for('add_anchor') }}" class="form-grid">
+      <div>
+        <label for="study_id">Study ID</label>
+        <input type="text" id="study_id" name="study_id" required placeholder="e.g. HAI-00123">
+      </div>
+      <div>
+        <label for="event_type">Event type</label>
+        <select id="event_type" name="event_type" required>
+          {% for et in anchor_event_types %}
+          <option value="{{ et }}">{{ et }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="event_date">Event date</label>
+        <input type="date" id="event_date" name="event_date" required>
+      </div>
+      <div>
+        <button type="submit">Add anchor event</button>
+      </div>
+    </form>
+  </div>
+
+  {% if review_emails %}
+  <div class="card">
+    <h2>Emails flagged for review</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Subject</th>
+          <th>Source</th>
+          <th>Reason</th>
+          <th>Preview</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for email in review_emails %}
+        <tr>
+          <td>{{ email.subject }}</td>
+          <td><span class="badge review">{{ email.source_key }}</span></td>
+          <td>{{ email.reason }}</td>
+          <td><pre class="preview">{{ email.body_preview[:500] }}</pre></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h2>Participants</h2>
+    {% if rows %}
+    <table>
+      <thead>
+        <tr>
+          <th>Study ID</th>
+          <th>Touchpoint</th>
+          <th>Anchor</th>
+          <th>Status</th>
+          <th>Offsets sent</th>
+          <th>Next due</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          {% for tp in row.touchpoints %}
+          <tr>
+            {% if loop.first %}
+            <td class="study-id" rowspan="{{ row.touchpoints|length }}">{{ row.study_id }}</td>
+            {% endif %}
+            <td>{{ tp.label }}<br><small class="muted">{{ tp.key }}</small></td>
+            <td>{{ tp.anchor_type }}<br><small>{{ tp.anchor_date }}</small></td>
+            <td>
+              {% if tp.done %}
+              <span class="badge done">Done{% if tp.done_date %} ({{ tp.done_date }}){% endif %}</span>
+              {% else %}
+              <span class="badge pending">Pending</span>
+              {% endif %}
+            </td>
+            <td class="offsets">{{ tp.offsets_sent or '[]' }}</td>
+            <td>
+              {% if tp.done %}
+              —
+              {% elif tp.next_due_offset is not none %}
+              day {{ tp.next_due_offset }}
+              {% else %}
+              all due sent
+              {% endif %}
+            </td>
+            <td>
+              {% if tp.done %}
+              <form class="inline" method="post" action="{{ url_for('undo_done', study_id=row.study_id, touchpoint_key=tp.key) }}">
+                <button type="submit" class="secondary">Undo</button>
+              </form>
+              {% else %}
+              <form class="inline" method="post" action="{{ url_for('mark_done', study_id=row.study_id, touchpoint_key=tp.key) }}">
+                <button type="submit">Mark done</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No participants yet. Add an anchor event or run email ingestion.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Registered touchpoints</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Key</th>
+          <th>Anchor event</th>
+          <th>Offsets (days)</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tp in touchpoint_definitions %}
+        <tr>
+          <td>{{ tp.key }}</td>
+          <td>{{ tp.anchor_event_type }}</td>
+          <td class="offsets">{{ tp.offsets }}</td>
+          <td>{{ tp.action_type }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
