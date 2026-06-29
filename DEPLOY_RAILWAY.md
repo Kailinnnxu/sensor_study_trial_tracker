@@ -74,17 +74,41 @@ In Railway → **Variables** (shared across services, or duplicated on each):
 
 ## Step 6 — Cron service (daily jobs)
 
-1. In the same Railway project → **New Service** → **GitHub Repo** (same repo)
-2. Set **Root Directory** to `Tracker`
-3. **Settings** → override start command:
+### Create the second service
 
-   ```
-   python scripts/run_daily.py
-   ```
+1. In the same Railway project → **+ New** → **GitHub Repo** → same repo
+2. **Root Directory:** leave empty (repo root is already the Tracker code)
+3. Rename this service something like `cron` so you can tell it apart from `web`
 
-4. **Settings** → **Cron Schedule** → e.g. `0 12 * * *` (12:00 UTC daily ≈ 7–8 AM Eastern)
-5. Attach the **same `/data` volume**
-6. Copy the same environment variables from the web service
+### Option A — Config file (easiest if you can't find Cron Schedule in the UI)
+
+1. Click the **cron** service → **Settings**
+2. Find **Railway Config File** (or **Config file path**)
+3. Set it to: **`railway.cron.json`**
+4. Redeploy
+
+That file sets:
+- Start command: `python scripts/run_daily.py`
+- Cron schedule: `0 12 * * *` (12:00 UTC daily ≈ 7–8 AM Eastern)
+- Restart policy: `NEVER` (required for cron jobs)
+
+### Option B — Dashboard (if you see the field)
+
+1. Click the **cron** service (not the web service)
+2. **Settings** tab → scroll down (often below Deploy / Networking)
+3. Look for **Cron Schedule** — enter `0 12 * * *`
+4. **Deploy** section → **Start Command:** `python scripts/run_daily.py`
+5. **Restart Policy:** `Never` or `ON_FAILURE` off — cron must exit when done
+
+**Can't find Cron Schedule?** Common reasons:
+- You're on the **web** service (gunicorn) — cron goes on the **second** service
+- The field is far down on **Settings** — keep scrolling
+- Use **Option A** (`railway.cron.json`) instead
+
+### Finish cron setup
+
+5. Attach the **same `/data` volume** to the cron service (`Ctrl+K` → search "volume")
+6. Copy the same **Variables** from the web service
 
 Cron services run the command on schedule, then exit. They do not stay running.
 
