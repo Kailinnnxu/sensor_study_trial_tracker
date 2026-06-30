@@ -21,6 +21,7 @@ class AnchorEvent:
     event_date: date
     source: str
     created_at: datetime
+    email_received_at: datetime | None = None
 
 
 @dataclass
@@ -86,6 +87,7 @@ def init_db(db_path: Path | None = None) -> None:
                 event_type TEXT NOT NULL,
                 event_date TEXT NOT NULL,
                 source TEXT NOT NULL,
+                email_received_at TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(study_id, event_type)
             );
@@ -120,9 +122,24 @@ def init_db(db_path: Path | None = None) -> None:
             );
             """
         )
+        _migrate_schema(conn)
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(anchor_events)")}
+    if "email_received_at" not in cols:
+        conn.execute("ALTER TABLE anchor_events ADD COLUMN email_received_at TEXT")
+
+
+def _parse_received_at(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    return datetime.fromisoformat(raw)
 
 
 def _row_to_anchor(row: sqlite3.Row) -> AnchorEvent:
+    keys = row.keys()
+    received = row["email_received_at"] if "email_received_at" in keys else None
     return AnchorEvent(
         id=row["id"],
         study_id=row["study_id"],
@@ -130,6 +147,7 @@ def _row_to_anchor(row: sqlite3.Row) -> AnchorEvent:
         event_date=date.fromisoformat(row["event_date"]),
         source=row["source"],
         created_at=datetime.fromisoformat(row["created_at"]),
+        email_received_at=_parse_received_at(received),
     )
 
 
@@ -150,18 +168,21 @@ def upsert_anchor_event(
     event_date: date,
     source: str,
     *,
+    email_received_at: datetime | None = None,
     db_path: Path | None = None,
 ) -> AnchorEvent:
+    received_str = email_received_at.isoformat() if email_received_at else None
     with get_db(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO anchor_events (study_id, event_type, event_date, source)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO anchor_events (study_id, event_type, event_date, source, email_received_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(study_id, event_type) DO UPDATE SET
                 event_date = excluded.event_date,
-                source = excluded.source
+                source = excluded.source,
+                email_received_at = COALESCE(excluded.email_received_at, anchor_events.email_received_at)
             """,
-            (study_id.strip(), event_type, event_date.isoformat(), source),
+            (study_id.strip(), event_type, event_date.isoformat(), source, received_str),
         )
         row = conn.execute(
             """
@@ -172,6 +193,35 @@ def upsert_anchor_event(
         ).fetchone()
         assert row is not None
         return _row_to_anchor(row)
+
+
+def backfill_email_received_at(
+    study_id: str,
+    event_type: str,
+    email_received_at: datetime,
+    *,
+    db_path: Path | None = None,
+) -> bool:
+    """Set email_received_at when missing. Returns True if updated."""
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT email_received_at FROM anchor_events
+            WHERE study_id = ? AND event_type = ?
+            """,
+            (study_id.strip(), event_type),
+        ).fetchone()
+        if row is None or row["email_received_at"]:
+            return False
+        conn.execute(
+            """
+            UPDATE anchor_events
+            SET email_received_at = ?
+            WHERE study_id = ? AND event_type = ?
+            """,
+            (email_received_at.isoformat(), study_id.strip(), event_type),
+        )
+    return True
 
 
 def get_anchor_events(

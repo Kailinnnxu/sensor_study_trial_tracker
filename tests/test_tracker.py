@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from unittest import mock
 
 from tracker.db import (
@@ -73,16 +73,45 @@ class TestIngestionRouting:
         assert _match_source(e2).event_type == "sensor_collection_start"
 
     def test_idempotent_ingestion(self, db_path):
+        received = datetime(2026, 6, 29, 14, 30, tzinfo=timezone.utc)
         email = EmailMessage(
             message_id="idem-1",
             sender="hai@hsl.harvard.edu",
             subject="HAI Y2 Visit Completed",
             body="P100 has completed. completed on 05-01-2025.",
+            received_at=received,
         )
         assert process_email(email, dry_run=False) == "ingested"
         assert process_email(email, dry_run=False) == "already_processed"
         anchors = get_anchor_events()
         assert len(anchors) == 1
+        assert anchors[0].email_received_at == received
+
+    def test_backfill_received_at_on_refetch(self, db_path):
+        from tracker.ingestion.run import run_ingestion
+
+        received = datetime(2026, 6, 29, 18, 38, 18, tzinfo=timezone.utc)
+        email = EmailMessage(
+            message_id="backfill-1",
+            sender="hai@hsl.harvard.edu",
+            subject="HAI Y1 Visit Completed",
+            body="BF100 has completed. completed on 06-22-2026.",
+            received_at=received,
+        )
+        process_email(email, dry_run=False)
+
+        with __import__("tracker.db", fromlist=["get_db"]).get_db() as conn:
+            conn.execute(
+                "UPDATE anchor_events SET email_received_at = NULL WHERE study_id = ?",
+                ("BF100",),
+            )
+
+        with mock.patch("tracker.ingestion.run.fetch_recent_messages", return_value=[email]):
+            stats = run_ingestion()
+
+        assert stats.received_dates_backfilled == 1
+        anchor = get_anchor_events(study_id="BF100")[0]
+        assert anchor.email_received_at == received
 
     def test_unparseable_flagged_not_dropped(self, db_path):
         email = EmailMessage(
@@ -206,3 +235,19 @@ class TestActions:
             )
         assert "would place Webex call" in caplog.text
         assert "WX1" in caplog.text
+
+
+class TestWebDashboard:
+    def test_manual_ingest_route(self, db_path):
+        from tracker.ingestion.run import IngestionStats
+        from tracker.web.app import create_app
+
+        app = create_app()
+        with mock.patch("tracker.web.app.run_ingestion") as run:
+            run.return_value = IngestionStats(ingested=2, processed=2)
+            client = app.test_client()
+            resp = client.post("/ingest", follow_redirects=True)
+
+        assert resp.status_code == 200
+        assert b"2 new participant" in resp.data
+        run.assert_called_once()

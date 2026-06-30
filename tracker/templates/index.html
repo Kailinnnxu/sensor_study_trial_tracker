@@ -114,11 +114,46 @@
       max-height: 8rem;
       overflow: auto;
     }
+    .flash {
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      margin-bottom: 1rem;
+      font-size: 0.95rem;
+    }
+    .flash.success { background: #dafbe1; color: var(--done); }
+    .flash.warning { background: #fff8c5; color: var(--pending); }
+    .flash.error { background: #ffebe9; color: var(--review); }
+    .flash.info { background: #eaeef2; color: var(--text); }
+    .actions-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .actions-row p { margin: 0; color: var(--muted); font-size: 0.9rem; }
   </style>
 </head>
 <body>
   <h1>Participant Touchpoint Tracker</h1>
   <p class="muted">Study ID only — no PHI stored in this system.</p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+  {% for category, message in messages %}
+  <div class="flash {{ category }}">{{ message }}</div>
+  {% endfor %}
+  {% endif %}
+  {% endwith %}
+
+  <div class="card">
+    <h2>Fetch HAI emails</h2>
+    <div class="actions-row">
+      <form method="post" action="{{ url_for('ingest_emails') }}">
+        <button type="submit">Fetch from Gmail now</button>
+      </form>
+      <p>Checks klx5505@gmail.com for new HAI visit / sensor trigger emails.</p>
+    </div>
+  </div>
 
   <div class="card">
     <h2>Add anchor event</h2>
@@ -179,7 +214,8 @@
         <tr>
           <th>Study ID</th>
           <th>Touchpoint</th>
-          <th>Anchor</th>
+          <th>Anchor event</th>
+          <th>Email received (UTC)</th>
           <th>Status</th>
           <th>Offsets sent</th>
           <th>Next due</th>
@@ -194,7 +230,14 @@
             <td class="study-id" rowspan="{{ row.touchpoints|length }}">{{ row.study_id }}</td>
             {% endif %}
             <td>{{ tp.label }}<br><small class="muted">{{ tp.key }}</small></td>
-            <td>{{ tp.anchor_type }}<br><small>{{ tp.anchor_date }}</small></td>
+            <td>{{ tp.anchor_type }}<br><small>Event: {{ tp.anchor_date }}</small></td>
+            <td>
+              {% if tp.email_received_at %}
+              {{ tp.email_received_at.strftime('%Y-%m-%d %H:%M') }}
+              {% else %}
+              <span class="muted">—</span>
+              {% endif %}
+            </td>
             <td>
               {% if tp.done %}
               <span class="badge done">Done{% if tp.done_date %} ({{ tp.done_date }}){% endif %}</span>
@@ -206,10 +249,14 @@
             <td>
               {% if tp.done %}
               —
-              {% elif tp.next_due_offset is not none %}
-              day {{ tp.next_due_offset }}
-              {% else %}
+              {% elif tp.due_info.all_sent %}
               all due sent
+              {% elif tp.due_info.overdue %}
+              reminders pending (days {{ tp.due_info.overdue | join(', ') }})
+              {% elif tp.due_info.next_future is not none %}
+              day {{ tp.due_info.next_future }}
+              {% else %}
+              —
               {% endif %}
             </td>
             <td>

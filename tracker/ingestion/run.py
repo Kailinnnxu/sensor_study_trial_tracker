@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from tracker.config import INGESTION_SOURCES, IngestionSource
 from tracker.db import (
+    backfill_email_received_at,
     flag_email_for_review,
     is_email_processed,
     mark_email_processed,
@@ -25,6 +26,7 @@ class IngestionStats:
     skipped_already_processed: int = 0
     flagged_for_review: int = 0
     no_match: int = 0
+    received_dates_backfilled: int = 0
 
 
 def _match_source(email: EmailMessage) -> IngestionSource | None:
@@ -34,6 +36,23 @@ def _match_source(email: EmailMessage) -> IngestionSource | None:
         if source.subject_regex.match(email.subject.strip()):
             return source
     return None
+
+
+def _try_backfill_received_at(email: EmailMessage, *, dry_run: bool = False) -> bool:
+    """Fill email_received_at on existing anchors when missing."""
+    source = _match_source(email)
+    if source is None or not email.received_at:
+        return False
+    outcome = parse_body(source.parser_key, email.body)
+    if isinstance(outcome, ParseError):
+        return False
+    if dry_run:
+        return True
+    return backfill_email_received_at(
+        outcome.study_id,
+        source.event_type,
+        email.received_at,
+    )
 
 
 def process_email(email: EmailMessage, *, dry_run: bool = False) -> str:
@@ -70,6 +89,7 @@ def process_email(email: EmailMessage, *, dry_run: bool = False) -> str:
             source.event_type,
             outcome.event_date,
             source="email",
+            email_received_at=email.received_at,
         )
         mark_email_processed(
             email.message_id,
@@ -91,6 +111,8 @@ def run_ingestion(*, dry_run: bool = False, max_results: int = 100) -> Ingestion
     for email in emails:
         if is_email_processed(email.message_id):
             stats.skipped_already_processed += 1
+            if _try_backfill_received_at(email, dry_run=dry_run):
+                stats.received_dates_backfilled += 1
             continue
 
         source = _match_source(email)

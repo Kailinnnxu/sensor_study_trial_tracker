@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from email.utils import parseaddr
 from pathlib import Path
 
@@ -25,6 +26,7 @@ class EmailMessage:
     sender: str
     subject: str
     body: str
+    received_at: datetime | None = None
 
 
 def _decode_body(data: str) -> str:
@@ -127,12 +129,19 @@ def fetch_recent_messages(
         _, sender = parseaddr(raw_from)
         subject = _header(headers, "Subject")
         body = _extract_body(msg.get("payload", {}))
+        internal_date = msg.get("internalDate")
+        received_at = None
+        if internal_date:
+            received_at = datetime.fromtimestamp(
+                int(internal_date) / 1000, tz=timezone.utc
+            )
         messages.append(
             EmailMessage(
                 message_id=msg["id"],
                 sender=sender.lower(),
                 subject=subject.strip(),
                 body=body,
+                received_at=received_at,
             )
         )
 

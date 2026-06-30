@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from flask import Flask, redirect, render_template, request, url_for
+from flask import Flask, flash, redirect, render_template, request, url_for
 
 from tracker.env import load_env
 from tracker.config import (
@@ -25,21 +25,31 @@ from tracker.db import (
     set_touchpoint_done,
     upsert_anchor_event,
 )
+from tracker.ingestion.run import run_ingestion
 
 
-def _next_due_offset(
+def _touchpoint_due_info(
     offsets: tuple[int, ...],
     offsets_sent: list[int],
     anchor_date: date,
     done: bool,
-) -> int | None:
+) -> dict[str, Any]:
+    """Summarize reminder state for dashboard display."""
     if done:
-        return None
+        return {"all_sent": False, "overdue": [], "next_future": None}
+
     days_since = (date.today() - anchor_date).days
-    for offset in offsets:
-        if offset not in offsets_sent and days_since < offset:
-            return offset
-    return None
+    unsent = [o for o in offsets if o not in offsets_sent]
+    if not unsent:
+        return {"all_sent": True, "overdue": [], "next_future": None}
+
+    overdue = [o for o in unsent if days_since >= o]
+    future = [o for o in unsent if days_since < o]
+    return {
+        "all_sent": False,
+        "overdue": overdue,
+        "next_future": min(future) if future else None,
+    }
 
 
 def build_dashboard_rows() -> list[dict[str, Any]]:
@@ -60,19 +70,22 @@ def build_dashboard_rows() -> list[dict[str, Any]]:
             if status is None:
                 status = get_or_create_touchpoint_status(study_id, tp.key)
 
+            due = _touchpoint_due_info(
+                tp.offsets, status.offsets_sent, anchor.event_date, status.done
+            )
             touchpoints.append(
                 {
                     "key": tp.key,
                     "label": tp.label,
                     "anchor_date": anchor.event_date,
                     "anchor_type": tp.anchor_event_type,
+                    "email_received_at": anchor.email_received_at,
+                    "anchor_source": anchor.source,
                     "done": status.done,
                     "done_date": status.done_date,
                     "offsets_sent": status.offsets_sent,
                     "offsets": tp.offsets,
-                    "next_due_offset": _next_due_offset(
-                        tp.offsets, status.offsets_sent, anchor.event_date, status.done
-                    ),
+                    "due_info": due,
                     "action_type": tp.action_type,
                 }
             )
@@ -117,6 +130,41 @@ def create_app() -> Flask:
             upsert_anchor_event(study_id, event_type, event_date, source="manual")
             for tp in get_touchpoints_for_event_type(event_type):
                 get_or_create_touchpoint_status(study_id, tp.key)
+
+        return redirect(url_for("index"))
+
+    @app.route("/ingest", methods=["POST"])
+    def ingest_emails():
+        try:
+            stats = run_ingestion()
+        except Exception as exc:
+            flash(f"Email fetch failed: {exc}", "error")
+            return redirect(url_for("index"))
+
+        if stats.ingested:
+            flash(
+                f"Fetched HAI emails: {stats.ingested} new participant(s) ingested.",
+                "success",
+            )
+        elif stats.received_dates_backfilled:
+            flash(
+                f"Updated email received time for {stats.received_dates_backfilled} "
+                "participant(s).",
+                "success",
+            )
+        elif stats.flagged_for_review:
+            flash(
+                f"Fetched emails: {stats.flagged_for_review} need manual review "
+                "(see below).",
+                "warning",
+            )
+        elif stats.skipped_already_processed:
+            flash(
+                f"No new emails — {stats.skipped_already_processed} already processed.",
+                "info",
+            )
+        else:
+            flash("No matching HAI emails found in Gmail.", "info")
 
         return redirect(url_for("index"))
 
