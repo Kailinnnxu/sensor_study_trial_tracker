@@ -2,27 +2,34 @@
 
 from __future__ import annotations
 
+import csv
+import io
 from datetime import date
 from typing import Any
 
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, flash, make_response, redirect, render_template, request, url_for
 
 from tracker.env import load_env
 from tracker.config import (
     ANCHOR_EVENT_TYPES,
+    DASHBOARD_PHASES,
     TOUCHPOINT_DEFINITIONS,
     TOUCHPOINT_BY_KEY,
+    TOUCHPOINT_OUTCOME_LABELS,
+    TOUCHPOINT_OUTCOMES,
     flask_secret_key,
     get_touchpoints_for_event_type,
 )
 from tracker.db import (
     get_all_study_ids,
     get_anchor_events,
+    get_closed_touchpoint_records,
     get_or_create_touchpoint_status,
     get_review_emails,
+    get_touchpoint_outcome_log,
     get_touchpoint_statuses_for_study,
     init_db,
-    set_touchpoint_done,
+    set_touchpoint_outcome,
     upsert_anchor_event,
 )
 from tracker.ingestion.run import run_ingestion
@@ -52,7 +59,7 @@ def _touchpoint_due_info(
     }
 
 
-def build_dashboard_rows() -> list[dict[str, Any]]:
+def build_dashboard_rows(*, anchor_event_type: str | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     study_ids = get_all_study_ids()
 
@@ -62,6 +69,8 @@ def build_dashboard_rows() -> list[dict[str, Any]]:
         touchpoints: list[dict[str, Any]] = []
 
         for tp in TOUCHPOINT_DEFINITIONS:
+            if anchor_event_type and tp.anchor_event_type != anchor_event_type:
+                continue
             anchor = anchors.get(tp.anchor_event_type)
             if anchor is None:
                 continue
@@ -81,7 +90,10 @@ def build_dashboard_rows() -> list[dict[str, Any]]:
                     "anchor_type": tp.anchor_event_type,
                     "email_received_at": anchor.email_received_at,
                     "anchor_source": anchor.source,
-                    "done": status.done,
+                    "outcome": status.outcome,
+                    "outcome_label": TOUCHPOINT_OUTCOME_LABELS.get(
+                        status.outcome, status.outcome
+                    ),
                     "done_date": status.done_date,
                     "offsets_sent": status.offsets_sent,
                     "offsets": tp.offsets,
@@ -96,9 +108,77 @@ def build_dashboard_rows() -> list[dict[str, Any]]:
     return rows
 
 
+def build_dashboard_phases() -> list[dict[str, Any]]:
+    return [
+        {
+            "key": phase["key"],
+            "title": phase["title"],
+            "rows": build_dashboard_rows(anchor_event_type=phase["anchor_event_type"]),
+        }
+        for phase in DASHBOARD_PHASES
+    ]
+
+
+def _enrich_outcome_records(records: list) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for record in records:
+        tp_def = TOUCHPOINT_BY_KEY.get(record.touchpoint_key)
+        enriched.append(
+            {
+                **record.__dict__,
+                "touchpoint_label": tp_def.label if tp_def else record.touchpoint_key,
+                "outcome_label": TOUCHPOINT_OUTCOME_LABELS.get(
+                    record.outcome, record.outcome
+                ),
+            }
+        )
+    return enriched
+
+
+def _enrich_outcome_history(entries: list) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for entry in entries:
+        tp_def = TOUCHPOINT_BY_KEY.get(entry.touchpoint_key)
+        prev_label = (
+            TOUCHPOINT_OUTCOME_LABELS.get(entry.previous_outcome, entry.previous_outcome)
+            if entry.previous_outcome
+            else None
+        )
+        enriched.append(
+            {
+                **entry.__dict__,
+                "touchpoint_label": tp_def.label if tp_def else entry.touchpoint_key,
+                "outcome_label": TOUCHPOINT_OUTCOME_LABELS.get(
+                    entry.outcome, entry.outcome
+                ),
+                "previous_outcome_label": prev_label,
+            }
+        )
+    return enriched
+
+
+def _outcome_counts() -> dict[str, int]:
+    from tracker.config import (
+        TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
+        TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
+    )
+
+    all_closed = get_closed_touchpoint_records()
+    return {
+        "visit_scheduled": sum(
+            1 for r in all_closed if r.outcome == TOUCHPOINT_OUTCOME_VISIT_SCHEDULED
+        ),
+        "no_longer_interested": sum(
+            1
+            for r in all_closed
+            if r.outcome == TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED
+        ),
+    }
+
+
 def create_app() -> Flask:
     load_env()
-    app = Flask(__name__, template_folder="../templates")
+    app = Flask(__name__, template_folder="../templates", static_folder="../static")
     app.secret_key = flask_secret_key()
 
     @app.before_request
@@ -113,7 +193,7 @@ def create_app() -> Flask:
     def index():
         return render_template(
             "index.html",
-            rows=build_dashboard_rows(),
+            phases=build_dashboard_phases(),
             anchor_event_types=ANCHOR_EVENT_TYPES,
             touchpoint_definitions=TOUCHPOINT_DEFINITIONS,
             review_emails=get_review_emails(),
@@ -146,6 +226,12 @@ def create_app() -> Flask:
                 f"Fetched HAI emails: {stats.ingested} new participant(s) ingested.",
                 "success",
             )
+        elif stats.event_dates_updated:
+            flash(
+                f"Updated assessment/event dates for {stats.event_dates_updated} "
+                "participant(s) from email bodies.",
+                "success",
+            )
         elif stats.received_dates_backfilled:
             flash(
                 f"Updated email received time for {stats.received_dates_backfilled} "
@@ -168,15 +254,83 @@ def create_app() -> Flask:
 
         return redirect(url_for("index"))
 
-    @app.route("/touchpoint/<study_id>/<touchpoint_key>/done", methods=["POST"])
-    def mark_done(study_id: str, touchpoint_key: str):
-        set_touchpoint_done(study_id, touchpoint_key, done=True)
-        return redirect(url_for("index"))
+    @app.route(
+        "/touchpoint/<study_id>/<touchpoint_key>/outcome/<outcome>",
+        methods=["POST"],
+    )
+    def set_outcome(study_id: str, touchpoint_key: str, outcome: str):
+        if outcome not in TOUCHPOINT_OUTCOMES:
+            flash(f"Invalid outcome: {outcome}", "error")
+            return redirect(url_for("index"))
+        set_touchpoint_outcome(study_id, touchpoint_key, outcome)
+        return redirect(request.referrer or url_for("index"))
 
-    @app.route("/touchpoint/<study_id>/<touchpoint_key>/undo", methods=["POST"])
-    def undo_done(study_id: str, touchpoint_key: str):
-        set_touchpoint_done(study_id, touchpoint_key, done=False)
-        return redirect(url_for("index"))
+    @app.route("/outcomes")
+    def outcome_registry():
+        filter_outcome = request.args.get("outcome", "").strip() or None
+        if filter_outcome and filter_outcome not in TOUCHPOINT_OUTCOMES:
+            filter_outcome = None
+        if filter_outcome == "pending":
+            filter_outcome = None
+
+        records = _enrich_outcome_records(
+            get_closed_touchpoint_records(outcome=filter_outcome)
+        )
+        history = _enrich_outcome_history(get_touchpoint_outcome_log(limit=200))
+        return render_template(
+            "outcomes.html",
+            records=records,
+            history=history,
+            filter_outcome=filter_outcome,
+            counts=_outcome_counts(),
+        )
+
+    @app.route("/outcomes.csv")
+    def outcome_registry_csv():
+        filter_outcome = request.args.get("outcome", "").strip() or None
+        if filter_outcome and filter_outcome not in TOUCHPOINT_OUTCOMES:
+            filter_outcome = None
+        if filter_outcome == "pending":
+            filter_outcome = None
+
+        records = _enrich_outcome_records(
+            get_closed_touchpoint_records(outcome=filter_outcome)
+        )
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "study_id",
+                "touchpoint_key",
+                "touchpoint_label",
+                "outcome",
+                "outcome_date",
+                "anchor_event_type",
+                "anchor_event_date",
+                "email_received_utc",
+                "offsets_sent",
+            ]
+        )
+        for r in records:
+            received = r["email_received_at"]
+            writer.writerow(
+                [
+                    r["study_id"],
+                    r["touchpoint_key"],
+                    r["touchpoint_label"],
+                    r["outcome_label"],
+                    r["outcome_date"] or "",
+                    r["anchor_event_type"],
+                    r["anchor_event_date"],
+                    received.strftime("%Y-%m-%d %H:%M") if received else "",
+                    str(r["offsets_sent"]),
+                ]
+            )
+
+        response = make_response(output.getvalue())
+        response.headers["Content-Type"] = "text/csv; charset=utf-8"
+        response.headers["Content-Disposition"] = "attachment; filename=outcome_registry.csv"
+        return response
 
     return app
 

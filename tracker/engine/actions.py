@@ -49,17 +49,31 @@ def _message_for_schedule_home_visit(ctx: ActionContext) -> tuple[str, str]:
     return subject, body
 
 
-def _message_for_sensor_dropoff(ctx: ActionContext) -> tuple[str, str]:
-    subject = f"[Tracker] Sensor drop-off due: {ctx.study_id}"
+def _message_for_sensor_followup(ctx: ActionContext) -> tuple[str, str]:
+    subject = f"[Tracker] Sensor follow-up call due: {ctx.study_id}"
     body = (
-        f"Study ID {ctx.study_id} reached the {ctx.offset}-day sensor drop-off "
-        f"reminder (sensor collection started {ctx.anchor_date.isoformat()})."
+        f"Study ID {ctx.study_id} started sensor data collection on "
+        f"{ctx.anchor_date.isoformat()}.\n\n"
+        f"This is the day-{ctx.offset} reminder to call and follow up on "
+        "sensor collection."
+    )
+    return subject, body
+
+
+def _message_for_sensor_dropoff(ctx: ActionContext) -> tuple[str, str]:
+    subject = f"[Tracker] Sensor drop-off Webex call due: {ctx.study_id}"
+    body = (
+        f"Study ID {ctx.study_id} reached the day-{ctx.offset} sensor drop-off "
+        f"reminder (sensor collection started {ctx.anchor_date.isoformat()}).\n\n"
+        "Action: place a Webex call to the participant with a prerecorded "
+        "voicemail or automated call (integration pending)."
     )
     return subject, body
 
 
 MESSAGE_BUILDERS: dict[str, Callable[[ActionContext], tuple[str, str]]] = {
     "schedule_home_visit": _message_for_schedule_home_visit,
+    "sensor_collection_followup": _message_for_sensor_followup,
     "sensor_dropoff_reminder": _message_for_sensor_dropoff,
 }
 

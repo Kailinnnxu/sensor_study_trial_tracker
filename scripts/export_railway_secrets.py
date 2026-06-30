@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Print base64 Gmail secrets for pasting into Railway environment variables."""
+"""Export base64 Gmail secrets for Railway environment variables."""
 
 from __future__ import annotations
 
+import argparse
 import base64
 import sys
 from pathlib import Path
@@ -19,23 +20,45 @@ def _b64(path: Path) -> str:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Export Gmail B64 secrets for Railway")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        help="Write variables to a text file (easier than copying from terminal)",
+    )
+    args = parser.parse_args()
+
     creds = gmail_credentials_path()
     token = gmail_token_path()
+    creds_b64 = _b64(creds)
+    token_b64 = _b64(token)
 
-    print("Paste these into Railway → your service → Variables:\n")
-    print(f"GMAIL_CREDENTIALS_B64={_b64(creds)}")
+    lines = [
+        f"GMAIL_CREDENTIALS_B64={creds_b64}",
+        f"GMAIL_TOKEN_B64={token_b64}",
+    ]
+
+    if args.out:
+        args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"Wrote {args.out}")
+        print(f"  GMAIL_CREDENTIALS_B64 length: {len(creds_b64)}")
+        print(f"  GMAIL_TOKEN_B64 length: {len(token_b64)}")
+        print("Open the file and copy each FULL line into Railway Variables.")
+        return 0
+
+    print("Paste these into Railway → Variables (copy the FULL line after =):\n")
+    print(lines[0])
     print()
-    print(f"GMAIL_TOKEN_B64={_b64(token)}")
+    print(lines[1])
+    print()
+    print(f"Lengths: credentials={len(creds_b64)}, token={len(token_b64)}")
+    print()
+    print("Tip: use --out railway_gmail_vars.txt to avoid terminal truncation.")
     print()
     print("Also set (shared by web + cron services):")
     print("  TRACKER_DATABASE_PATH=/data/tracker.db")
     print("  GMAIL_TOKEN_PATH=/data/gmail_token.json")
     print("  GMAIL_CREDENTIALS_PATH=/data/gmail_credentials.json")
-    print("  KAILIN_EMAIL=...")
-    print("  SMTP_USER=...")
-    print("  SMTP_PASSWORD=...")
-    print("  FLASK_SECRET_KEY=...")
-    print("  APP_URL=https://your-app.up.railway.app")
     return 0
 
 

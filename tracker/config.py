@@ -43,11 +43,18 @@ TOUCHPOINT_DEFINITIONS: tuple[TouchpointDefinition, ...] = (
         label="Schedule home visit",
     ),
     TouchpointDefinition(
+        key="sensor_collection_followup",
+        anchor_event_type="sensor_collection_start",
+        offsets=(2,),
+        action_type="email_kailin",
+        label="Sensor collection follow-up call",
+    ),
+    TouchpointDefinition(
         key="sensor_dropoff_reminder",
         anchor_event_type="sensor_collection_start",
         offsets=(9,),
         action_type="webex_call",
-        label="Sensor drop-off reminder",
+        label="Sensor drop-off (Webex call)",
     ),
 )
 
@@ -66,11 +73,11 @@ INGESTION_SOURCES: tuple[IngestionSource, ...] = (
         parser_key="hai_assessment",
     ),
     IngestionSource(
-        key="hai_sensor_collection",
-        sender="hai@hsl.harvard.edu",
+        key="kailin_sensor_collection",
+        sender="kailinxu@hsl.harvard.edu",
         subject_pattern=r"^Sensor data collection trigger$",
         event_type="sensor_collection_start",
-        parser_key="hai_sensor",
+        parser_key="sensor_collection",
     ),
 )
 
@@ -85,6 +92,20 @@ ANCHOR_EVENT_TYPES: tuple[str, ...] = tuple(
 
 def get_touchpoints_for_event_type(event_type: str) -> list[TouchpointDefinition]:
     return [tp for tp in TOUCHPOINT_DEFINITIONS if tp.anchor_event_type == event_type]
+
+
+DASHBOARD_PHASES: tuple[dict[str, str], ...] = (
+    {
+        "key": "phase1",
+        "title": "Phase 1 — Home visit scheduling",
+        "anchor_event_type": "assessment_complete",
+    },
+    {
+        "key": "phase2",
+        "title": "Phase 2 — Sensor collection",
+        "anchor_event_type": "sensor_collection_start",
+    },
+)
 
 
 # ---------------------------------------------------------------------------
@@ -137,3 +158,21 @@ def flask_secret_key() -> str:
 
 def app_url() -> str:
     return _env("APP_URL", "http://localhost:5000")
+
+
+# Touchpoint closure outcomes (replaces generic "done").
+TOUCHPOINT_OUTCOME_PENDING = "pending"
+TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED = "no_longer_interested"
+TOUCHPOINT_OUTCOME_VISIT_SCHEDULED = "visit_scheduled"
+
+TOUCHPOINT_OUTCOMES: tuple[str, ...] = (
+    TOUCHPOINT_OUTCOME_PENDING,
+    TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
+    TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
+)
+
+TOUCHPOINT_OUTCOME_LABELS: dict[str, str] = {
+    TOUCHPOINT_OUTCOME_PENDING: "Pending",
+    TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED: "No longer interested",
+    TOUCHPOINT_OUTCOME_VISIT_SCHEDULED: "Visit scheduled",
+}

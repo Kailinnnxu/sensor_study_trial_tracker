@@ -15,7 +15,12 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from tracker.config import gmail_credentials_path, gmail_token_path
-from tracker.gmail_secrets import ensure_gmail_files, persist_token
+from tracker.gmail_secrets import (
+    GmailSetupError,
+    ensure_gmail_files,
+    gmail_setup_diagnostics,
+    persist_token,
+)
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
@@ -78,6 +83,7 @@ def get_gmail_service():
     ensure_gmail_files()
     creds_path = gmail_credentials_path()
     token_path = gmail_token_path()
+    diag = gmail_setup_diagnostics()
     creds = None
 
     if token_path.exists():
@@ -88,12 +94,10 @@ def get_gmail_service():
             creds.refresh(Request())
             persist_token(creds.to_json())
         else:
+            if not token_path.exists():
+                raise GmailSetupError(diag)
             if not creds_path.exists():
-                raise FileNotFoundError(
-                    f"Gmail credentials not found at {creds_path}. "
-                    "Run scripts/setup_gmail_oauth.py locally, or set "
-                    "GMAIL_CREDENTIALS_JSON on Railway."
-                )
+                raise GmailSetupError(diag)
             flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
             creds = flow.run_local_server(port=0)
             persist_token(creds.to_json())

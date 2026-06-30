@@ -25,40 +25,47 @@ ParseOutcome = ParseResult | ParseError
 def _parse_hai_assessment(body: str) -> ParseOutcome:
     """Parse HAI assessment-complete email body.
 
-  Expected patterns:
-    - Study ID: "<id> has completed..."
-    - Date: "completed on MM-DD-YYYY"
+    Expected patterns:
+      - Study ID: "<id> has completed..."
+      - Assessment date: "completed on MM-DD-YYYY" (uses latest if several appear)
     """
     study_match = re.search(r"(\S+)\s+has completed", body, re.IGNORECASE)
     if not study_match:
         return ParseError("Could not find study ID (expected '<id> has completed...')")
 
-    date_match = re.search(r"completed on\s+(\d{2}-\d{2}-\d{4})", body, re.IGNORECASE)
-    if not date_match:
+    date_matches = re.findall(
+        r"completed on\s+(\d{2}-\d{2}-\d{4})", body, re.IGNORECASE
+    )
+    if not date_matches:
         return ParseError("Could not find completion date (expected 'completed on MM-DD-YYYY')")
 
-    try:
-        event_date = datetime.strptime(date_match.group(1), "%m-%d-%Y").date()
-    except ValueError:
-        return ParseError(f"Invalid date format: {date_match.group(1)}")
+    parsed_dates: list[date] = []
+    for raw in date_matches:
+        try:
+            parsed_dates.append(datetime.strptime(raw, "%m-%d-%Y").date())
+        except ValueError:
+            return ParseError(f"Invalid date format: {raw}")
 
-    return ParseResult(study_id=study_match.group(1).strip(), event_date=event_date)
+    return ParseResult(
+        study_id=study_match.group(1).strip(),
+        event_date=max(parsed_dates),
+    )
 
 
-def _parse_hai_sensor(body: str) -> ParseOutcome:
+def _parse_sensor_collection(body: str) -> ParseOutcome:
     """Parse sensor collection trigger email body.
 
-  Expected patterns:
-    ID: <record_id>
-    Date: <sensor_startdate>
+    Expected patterns (from kailinxu@hsl.harvard.edu):
+      ID: <study_id>
+      Date: MM-DD-YYYY  (study / sensor collection start date)
     """
     id_match = re.search(r"^ID:\s*(.+)$", body, re.IGNORECASE | re.MULTILINE)
     if not id_match:
-        return ParseError("Could not find study ID (expected 'ID: <record_id>')")
+        return ParseError("Could not find study ID (expected 'ID: <study_id>')")
 
     date_match = re.search(r"^Date:\s*(.+)$", body, re.IGNORECASE | re.MULTILINE)
     if not date_match:
-        return ParseError("Could not find date (expected 'Date: <sensor_startdate>')")
+        return ParseError("Could not find date (expected 'Date: MM-DD-YYYY')")
 
     raw_date = date_match.group(1).strip()
     for fmt in ("%m-%d-%Y", "%Y-%m-%d", "%m/%d/%Y"):
@@ -75,7 +82,8 @@ def _parse_hai_sensor(body: str) -> ParseOutcome:
 
 PARSERS: dict[str, Callable[[str], ParseOutcome]] = {
     "hai_assessment": _parse_hai_assessment,
-    "hai_sensor": _parse_hai_sensor,
+    "sensor_collection": _parse_sensor_collection,
+    "hai_sensor": _parse_sensor_collection,
 }
 
 

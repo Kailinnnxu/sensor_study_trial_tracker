@@ -5,12 +5,20 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from unittest import mock
 
+from tracker.config import (
+    TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
+    TOUCHPOINT_OUTCOME_PENDING,
+    TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
+)
 from tracker.db import (
     get_anchor_events,
+    get_closed_touchpoint_records,
     get_or_create_touchpoint_status,
+    get_touchpoint_outcome_log,
     is_email_processed,
     record_offset_sent,
     set_touchpoint_done,
+    set_touchpoint_outcome,
     upsert_anchor_event,
 )
 from tracker.engine.reminder import run_reminders
@@ -26,13 +34,33 @@ class TestParsers:
         assert result.study_id == "HAI-12345"
         assert result.event_date == date(2025, 6, 15)
 
+    def test_hai_assessment_uses_latest_date_in_body(self):
+        body = (
+            "CCB400_G has completed screening. completed on 06-01-2026. "
+            "Assessment completed on 06-25-2026."
+        )
+        result = parse_body("hai_assessment", body)
+        assert result.study_id == "CCB400_G"
+        assert result.event_date == date(2026, 6, 25)
+
     def test_hai_assessment_y4_subject_independent(self):
         body = "ABC99 has completed screening. Participant completed on 01-20-2024."
         result = parse_body("hai_assessment", body)
         assert result.study_id == "ABC99"
         assert result.event_date == date(2024, 1, 20)
 
-    def test_hai_sensor(self):
+    def test_sensor_collection_template(self):
+        body = (
+            "Hi,\n\n"
+            "This is the trigger of the start of sensor data collection from HAI.\n\n"
+            "ID: CCB101_G\n\n"
+            "Date: 06-25-2026"
+        )
+        result = parse_body("sensor_collection", body)
+        assert result.study_id == "CCB101_G"
+        assert result.event_date == date(2026, 6, 25)
+
+    def test_hai_sensor_alias(self):
         body = "ID: HAI-999\nDate: 03-10-2025\n"
         result = parse_body("hai_sensor", body)
         assert result.study_id == "HAI-999"
@@ -58,17 +86,18 @@ class TestIngestionRouting:
     def test_phase2_subject_routes_to_sensor(self):
         email = EmailMessage(
             message_id="m2",
-            sender="hai@hsl.harvard.edu",
+            sender="kailinxu@hsl.harvard.edu",
             subject="Sensor data collection trigger",
             body="ID: REC-1\nDate: 06-01-2025",
         )
         source = _match_source(email)
         assert source is not None
         assert source.event_type == "sensor_collection_start"
+        assert source.key == "kailin_sensor_collection"
 
     def test_same_sender_different_subject(self):
         e1 = EmailMessage("a", "hai@hsl.harvard.edu", "HAI Y4 Visit Completed", "X has completed. completed on 01-01-2025.")
-        e2 = EmailMessage("b", "hai@hsl.harvard.edu", "Sensor data collection trigger", "ID: X\nDate: 01-01-2025")
+        e2 = EmailMessage("b", "kailinxu@hsl.harvard.edu", "Sensor data collection trigger", "ID: X\nDate: 01-01-2025")
         assert _match_source(e1).event_type == "assessment_complete"
         assert _match_source(e2).event_type == "sensor_collection_start"
 
@@ -125,6 +154,120 @@ class TestIngestionRouting:
         assert is_email_processed("bad-1")
         assert len(get_anchor_events()) == 0
 
+    def test_duplicate_emails_keep_latest_date_in_batch(self, db_path):
+        older = EmailMessage(
+            message_id="dup-old",
+            sender="kailinxu@hsl.harvard.edu",
+            subject="Sensor data collection trigger",
+            body="ID: CCB300_G\nDate: 06-01-2026",
+        )
+        newer = EmailMessage(
+            message_id="dup-new",
+            sender="kailinxu@hsl.harvard.edu",
+            subject="Sensor data collection trigger",
+            body="ID: CCB300_G\nDate: 06-25-2026",
+        )
+
+        with mock.patch("tracker.ingestion.run.fetch_recent_messages", return_value=[older, newer]):
+            from tracker.ingestion.run import run_ingestion
+
+            stats = run_ingestion()
+
+        assert stats.ingested == 1
+        anchor = get_anchor_events(study_id="CCB300_G")[0]
+        assert anchor.event_date == date(2026, 6, 25)
+        assert is_email_processed("dup-old")
+        assert is_email_processed("dup-new")
+
+    def test_duplicate_emails_keep_latest_date_any_order(self, db_path):
+        older = EmailMessage(
+            message_id="dup2-old",
+            sender="hai@hsl.harvard.edu",
+            subject="HAI Y1 Visit Completed",
+            body="CCB301_G has completed. completed on 06-01-2026.",
+        )
+        newer = EmailMessage(
+            message_id="dup2-new",
+            sender="hai@hsl.harvard.edu",
+            subject="HAI Y1 Visit Completed",
+            body="CCB301_G has completed. completed on 06-25-2026.",
+        )
+
+        process_email(newer, dry_run=False)
+        process_email(older, dry_run=False)
+
+        anchor = get_anchor_events(study_id="CCB301_G")[0]
+        assert anchor.event_date == date(2026, 6, 25)
+
+    def test_reconcile_latest_assessment_from_processed_emails(self, db_path):
+        from tracker.db import mark_email_processed
+        from tracker.ingestion.run import run_ingestion
+
+        older = EmailMessage(
+            message_id="recon-old",
+            sender="hai@hsl.harvard.edu",
+            subject="HAI Y1 Visit Completed",
+            body="CCB302_G has completed. completed on 06-01-2026.",
+            received_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+        )
+        newer = EmailMessage(
+            message_id="recon-new",
+            sender="hai@hsl.harvard.edu",
+            subject="HAI Y1 Visit Completed",
+            body="CCB302_G has completed. completed on 06-25-2026.",
+            received_at=datetime(2026, 6, 26, tzinfo=timezone.utc),
+        )
+        process_email(older, dry_run=False)
+        mark_email_processed("recon-new", "success", "assessment_complete:CCB302_G")
+
+        with mock.patch(
+            "tracker.ingestion.run.fetch_recent_messages",
+            return_value=[older, newer],
+        ):
+            stats = run_ingestion()
+
+        anchor = get_anchor_events(study_id="CCB302_G")[0]
+        assert anchor.event_date == date(2026, 6, 25)
+        assert stats.event_dates_updated == 1
+
+    def test_backfill_ignores_mismatched_assessment_date(self, db_path):
+        from tracker.ingestion.run import run_ingestion
+
+        anchor_email = EmailMessage(
+            message_id="bf-anchor",
+            sender="hai@hsl.harvard.edu",
+            subject="HAI Y1 Visit Completed",
+            body="BF200 has completed. completed on 06-22-2026.",
+            received_at=datetime(2026, 6, 29, 18, 38, 18, tzinfo=timezone.utc),
+        )
+        other_email = EmailMessage(
+            message_id="bf-other",
+            sender="hai@hsl.harvard.edu",
+            subject="HAI Y1 Visit Completed",
+            body="BF200 has completed. completed on 06-01-2026.",
+            received_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        process_email(anchor_email, dry_run=False)
+
+        with __import__("tracker.db", fromlist=["get_db"]).get_db() as conn:
+            conn.execute(
+                "UPDATE anchor_events SET email_received_at = NULL WHERE study_id = ?",
+                ("BF200",),
+            )
+        process_email(other_email, dry_run=False)
+
+        with mock.patch(
+            "tracker.ingestion.run.fetch_recent_messages",
+            return_value=[anchor_email, other_email],
+        ):
+            stats = run_ingestion()
+
+        assert stats.received_dates_backfilled == 1
+        assert stats.event_dates_updated == 0
+        anchor = get_anchor_events(study_id="BF200")[0]
+        assert anchor.event_date == date(2026, 6, 22)
+        assert anchor.email_received_at == datetime(2026, 6, 29, 18, 38, 18, tzinfo=timezone.utc)
+
 
 class TestReminderEngine:
     def test_sends_exact_offset_for_3_day_past_anchor(self, db_path):
@@ -160,7 +303,19 @@ class TestReminderEngine:
         today = date(2025, 6, 15)
         anchor_date = today - timedelta(days=5)
         upsert_anchor_event("S3", "assessment_complete", anchor_date, "manual")
-        set_touchpoint_done("S3", "schedule_home_visit", True)
+        set_touchpoint_outcome("S3", "schedule_home_visit", TOUCHPOINT_OUTCOME_VISIT_SCHEDULED)
+
+        with mock.patch("tracker.engine.reminder.dispatch_action") as dispatch:
+            run_reminders(today=today)
+            dispatch.assert_not_called()
+
+    def test_no_longer_interested_stops_reminders(self, db_path):
+        today = date(2025, 6, 15)
+        anchor_date = today - timedelta(days=5)
+        upsert_anchor_event("S3b", "assessment_complete", anchor_date, "manual")
+        set_touchpoint_outcome(
+            "S3b", "schedule_home_visit", TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED
+        )
 
         with mock.patch("tracker.engine.reminder.dispatch_action") as dispatch:
             run_reminders(today=today)
@@ -170,10 +325,10 @@ class TestReminderEngine:
         today = date(2025, 6, 10)
         anchor_date = today - timedelta(days=7)
         upsert_anchor_event("S4", "assessment_complete", anchor_date, "manual")
-        set_touchpoint_done("S4", "schedule_home_visit", True)
+        set_touchpoint_outcome("S4", "schedule_home_visit", TOUCHPOINT_OUTCOME_VISIT_SCHEDULED)
         record_offset_sent("S4", "schedule_home_visit", 0)
         record_offset_sent("S4", "schedule_home_visit", 3)
-        set_touchpoint_done("S4", "schedule_home_visit", False)
+        set_touchpoint_outcome("S4", "schedule_home_visit", TOUCHPOINT_OUTCOME_PENDING)
 
         with mock.patch("tracker.engine.reminder.dispatch_action") as dispatch:
             run_reminders(today=today)
@@ -191,10 +346,23 @@ class TestReminderEngine:
             offsets = [c[0][1].offset for c in dispatch.call_args_list]
             assert offsets == [0, 3]
 
+    def test_sensor_followup_email_day_2(self, db_path):
+        today = date(2026, 6, 27)
+        anchor_date = today - timedelta(days=2)
+        upsert_anchor_event("S6a", "sensor_collection_start", anchor_date, "email")
+
+        with mock.patch("tracker.engine.reminder.dispatch_action") as dispatch:
+            run_reminders(today=today)
+            dispatch.assert_called_once_with("email_kailin", mock.ANY)
+            ctx = dispatch.call_args[0][1]
+            assert ctx.touchpoint_key == "sensor_collection_followup"
+            assert ctx.offset == 2
+
     def test_sensor_dropoff_webex_stub(self, db_path):
         today = date(2025, 6, 19)
         anchor_date = today - timedelta(days=9)
         upsert_anchor_event("S6", "sensor_collection_start", anchor_date, "email")
+        record_offset_sent("S6", "sensor_collection_followup", 2)
 
         with mock.patch("tracker.engine.reminder.dispatch_action") as dispatch:
             run_reminders(today=today)
@@ -206,12 +374,83 @@ class TestReminderEngine:
     def test_independent_touchpoint_status(self, db_path):
         upsert_anchor_event("S7", "assessment_complete", date(2025, 1, 1), "manual")
         upsert_anchor_event("S7", "sensor_collection_start", date(2025, 2, 1), "manual")
-        set_touchpoint_done("S7", "schedule_home_visit", True)
+        set_touchpoint_outcome("S7", "schedule_home_visit", TOUCHPOINT_OUTCOME_VISIT_SCHEDULED)
 
         home = get_or_create_touchpoint_status("S7", "schedule_home_visit")
+        followup = get_or_create_touchpoint_status("S7", "sensor_collection_followup")
         sensor = get_or_create_touchpoint_status("S7", "sensor_dropoff_reminder")
+        assert home.outcome == TOUCHPOINT_OUTCOME_VISIT_SCHEDULED
         assert home.done is True
+        assert followup.outcome == TOUCHPOINT_OUTCOME_PENDING
+        assert sensor.outcome == TOUCHPOINT_OUTCOME_PENDING
         assert sensor.done is False
+
+    def test_sensor_ingestion_creates_touchpoint_rows(self, db_path):
+        email = EmailMessage(
+            message_id="sensor-ingest-1",
+            sender="kailinxu@hsl.harvard.edu",
+            subject="Sensor data collection trigger",
+            body="ID: CCB200_G\nDate: 06-25-2026",
+        )
+        assert process_email(email, dry_run=False) == "ingested"
+        followup = get_or_create_touchpoint_status("CCB200_G", "sensor_collection_followup")
+        dropoff = get_or_create_touchpoint_status("CCB200_G", "sensor_dropoff_reminder")
+        assert followup.outcome == TOUCHPOINT_OUTCOME_PENDING
+        assert dropoff.outcome == TOUCHPOINT_OUTCOME_PENDING
+        anchor = get_anchor_events(study_id="CCB200_G")[0]
+        assert anchor.event_type == "sensor_collection_start"
+        assert anchor.event_date == date(2026, 6, 25)
+
+
+class TestOutcomeRegistry:
+    def test_outcome_change_is_logged(self, db_path):
+        upsert_anchor_event("R1", "assessment_complete", date(2025, 3, 1), "manual")
+        set_touchpoint_outcome("R1", "schedule_home_visit", TOUCHPOINT_OUTCOME_VISIT_SCHEDULED)
+
+        log = get_touchpoint_outcome_log()
+        assert len(log) == 1
+        assert log[0].study_id == "R1"
+        assert log[0].outcome == TOUCHPOINT_OUTCOME_VISIT_SCHEDULED
+        assert log[0].previous_outcome == TOUCHPOINT_OUTCOME_PENDING
+
+    def test_closed_records_join_anchor(self, db_path):
+        upsert_anchor_event("R2", "assessment_complete", date(2025, 4, 1), "manual")
+        set_touchpoint_outcome(
+            "R2", "schedule_home_visit", TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED
+        )
+
+        records = get_closed_touchpoint_records()
+        assert len(records) == 1
+        assert records[0].study_id == "R2"
+        assert records[0].anchor_event_type == "assessment_complete"
+        assert records[0].outcome == TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED
+
+    def test_outcome_registry_page(self, db_path):
+        from tracker.web.app import create_app
+
+        upsert_anchor_event("R3", "assessment_complete", date(2025, 5, 1), "manual")
+        set_touchpoint_outcome("R3", "schedule_home_visit", TOUCHPOINT_OUTCOME_VISIT_SCHEDULED)
+
+        app = create_app()
+        client = app.test_client()
+        resp = client.get("/outcomes")
+        assert resp.status_code == 200
+        assert b"R3" in resp.data
+        assert b"Visit scheduled" in resp.data
+
+    def test_outcome_registry_csv(self, db_path):
+        from tracker.web.app import create_app
+
+        upsert_anchor_event("R4", "assessment_complete", date(2025, 6, 1), "manual")
+        set_touchpoint_outcome("R4", "schedule_home_visit", TOUCHPOINT_OUTCOME_VISIT_SCHEDULED)
+
+        app = create_app()
+        client = app.test_client()
+        resp = client.get("/outcomes.csv")
+        assert resp.status_code == 200
+        assert "text/csv" in resp.content_type
+        assert b"R4" in resp.data
+        assert b"visit_scheduled" in resp.data or b"Visit scheduled" in resp.data
 
 
 class TestActions:
@@ -224,6 +463,14 @@ class TestActions:
         subj3, body3 = _message_for_schedule_home_visit(ctx3)
         assert "ready to call" in body0.lower() or "New participant" in subj0
         assert "3 days" in body3 or "been 3" in body3
+
+    def test_sensor_followup_email_copy(self):
+        from tracker.engine.actions import ActionContext, _message_for_sensor_followup
+
+        ctx = ActionContext("CCB101_G", "sensor_collection_followup", 2, date(2026, 6, 25), 2)
+        subject, body = _message_for_sensor_followup(ctx)
+        assert "CCB101_G" in subject
+        assert "follow-up" in body.lower() or "follow up" in body.lower()
 
     def test_webex_handler_logs(self, caplog):
         import logging
@@ -251,3 +498,23 @@ class TestWebDashboard:
         assert resp.status_code == 200
         assert b"2 new participant" in resp.data
         run.assert_called_once()
+
+    def test_dashboard_includes_column_sort(self, db_path):
+        from datetime import date
+        from tracker.db import upsert_anchor_event
+        from tracker.web.app import create_app
+
+        upsert_anchor_event("SORT1", "assessment_complete", date(2026, 6, 1), "manual")
+
+        app = create_app()
+        client = app.test_client()
+        resp = client.get("/")
+        html = resp.data.decode()
+        assert resp.status_code == 200
+        assert "sortable-table" in html
+        assert "sort-icon" in html
+        assert 'class="no-sort">Actions</th>' in html
+        assert "actions-inner" in html
+        assert "data-sort-value" in html
+        assert "Click to sort" in html
+        assert "function initAllTables" in html

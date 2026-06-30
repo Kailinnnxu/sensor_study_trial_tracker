@@ -34,8 +34,9 @@ def main() -> int:
     init_db()
     stats = run_ingestion(dry_run=args.dry_run, max_results=args.max_results)
     logging.info(
-        "Ingestion complete: ingested=%d backfilled=%d flagged=%d skipped=%d processed=%d",
+        "Ingestion complete: ingested=%d dates_updated=%d backfilled=%d flagged=%d skipped=%d processed=%d",
         stats.ingested,
+        stats.event_dates_updated,
         stats.received_dates_backfilled,
         stats.flagged_for_review,
         stats.skipped_already_processed,

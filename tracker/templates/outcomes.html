@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Outcome registry — Participant Touchpoint Tracker</title>
+  <style>
+    :root {
+      --bg: #f5f6f8;
+      --card: #fff;
+      --border: #d8dce3;
+      --text: #1a1d23;
+      --muted: #5c6570;
+      --accent: #1f6feb;
+      --done: #1a7f37;
+      --pending: #9a6700;
+      --review: #cf222e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 2rem;
+      line-height: 1.5;
+    }
+    h1 { margin-top: 0; font-size: 1.75rem; }
+    h2 { font-size: 1.1rem; margin: 2rem 0 1rem; }
+    .nav { margin-bottom: 1.5rem; }
+    .nav a {
+      color: var(--accent);
+      text-decoration: none;
+      margin-right: 1rem;
+      font-weight: 600;
+    }
+    .nav a:hover { text-decoration: underline; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.65rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .badge.visit-scheduled { background: #dafbe1; color: var(--done); }
+    .badge.no-longer-interested { background: #ffebe9; color: var(--review); }
+    .badge.pending { background: #fff8c5; color: var(--pending); }
+    .study-id {
+      font-weight: 700;
+      font-family: ui-monospace, monospace;
+    }
+    .offsets {
+      font-family: ui-monospace, monospace;
+      font-size: 0.85rem;
+    }
+    .empty {
+      color: var(--muted);
+      font-style: italic;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .toolbar a.btn {
+      background: var(--accent);
+      color: #fff;
+      border-radius: 6px;
+      padding: 0.45rem 0.85rem;
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .filter-tabs a {
+      color: var(--muted);
+      text-decoration: none;
+      margin-right: 1rem;
+      font-weight: 600;
+    }
+    .filter-tabs a.active {
+      color: var(--accent);
+    }
+    .stats {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.5rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .stats strong { color: var(--text); }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <a href="{{ url_for('index') }}">← Dashboard</a>
+    <a href="{{ url_for('outcome_registry') }}" class="active">Outcome registry</a>
+  </nav>
+
+  <h1>Outcome registry</h1>
+  <p class="muted">Closed touchpoints: visit scheduled and no longer interested.</p>
+
+  <div class="card">
+    <div class="toolbar">
+      <div class="filter-tabs">
+        <a href="{{ url_for('outcome_registry') }}" {% if not filter_outcome %}class="active"{% endif %}>All closed</a>
+        <a href="{{ url_for('outcome_registry', outcome='visit_scheduled') }}" {% if filter_outcome == 'visit_scheduled' %}class="active"{% endif %}>Visit scheduled</a>
+        <a href="{{ url_for('outcome_registry', outcome='no_longer_interested') }}" {% if filter_outcome == 'no_longer_interested' %}class="active"{% endif %}>No longer interested</a>
+      </div>
+      <a class="btn" href="{{ url_for('outcome_registry_csv', outcome=filter_outcome) }}">Download CSV</a>
+    </div>
+
+    <div class="stats">
+      <span><strong>{{ counts.visit_scheduled }}</strong> visit scheduled</span>
+      <span><strong>{{ counts.no_longer_interested }}</strong> no longer interested</span>
+      <span><strong>{{ records|length }}</strong> shown</span>
+    </div>
+
+    {% if records %}
+    <table class="sortable-table">
+      <thead>
+        <tr>
+          <th>Study ID</th>
+          <th>Touchpoint</th>
+          <th>Outcome</th>
+          <th>Outcome date</th>
+          <th>Anchor event</th>
+          <th>Email received (UTC)</th>
+          <th>Reminders sent</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in records %}
+        <tr>
+          <td class="study-id" data-sort-value="{{ r.study_id }}">{{ r.study_id }}</td>
+          <td data-sort-value="{{ r.touchpoint_label }}">{{ r.touchpoint_label }}<br><small class="muted">{{ r.touchpoint_key }}</small></td>
+          <td data-sort-value="{{ r.outcome }}">
+            {% if r.outcome == 'visit_scheduled' %}
+            <span class="badge visit-scheduled">{{ r.outcome_label }}</span>
+            {% elif r.outcome == 'no_longer_interested' %}
+            <span class="badge no-longer-interested">{{ r.outcome_label }}</span>
+            {% else %}
+            <span class="badge">{{ r.outcome_label }}</span>
+            {% endif %}
+          </td>
+          <td data-sort-value="{{ r.outcome_date.isoformat() if r.outcome_date else '' }}">{{ r.outcome_date or '—' }}</td>
+          <td data-sort-value="{{ r.anchor_event_date.isoformat() }}">{{ r.anchor_event_type }}<br><small>Event: {{ r.anchor_event_date }}</small></td>
+          <td data-sort-value="{% if r.email_received_at %}{{ r.email_received_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}">
+            {% if r.email_received_at %}
+            {{ r.email_received_at.strftime('%Y-%m-%d %H:%M') }}
+            {% else %}
+            <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td class="offsets" data-sort-value="{{ r.offsets_sent | join(',') }}">{{ r.offsets_sent or '[]' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No closed touchpoints yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Change history</h2>
+    {% if history %}
+    <table class="sortable-table">
+      <thead>
+        <tr>
+          <th>Recorded (UTC)</th>
+          <th>Study ID</th>
+          <th>Touchpoint</th>
+          <th>Outcome</th>
+          <th>Previous</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in history %}
+        <tr>
+          <td data-sort-value="{{ h.recorded_at.strftime('%Y-%m-%d %H:%M') }}">{{ h.recorded_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td class="study-id" data-sort-value="{{ h.study_id }}">{{ h.study_id }}</td>
+          <td data-sort-value="{{ h.touchpoint_label }}">{{ h.touchpoint_label }}<br><small class="muted">{{ h.touchpoint_key }}</small></td>
+          <td data-sort-value="{{ h.outcome }}">{{ h.outcome_label }}</td>
+          <td data-sort-value="{{ h.previous_outcome or '' }}">{{ h.previous_outcome_label or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No outcome changes recorded yet.</p>
+    {% endif %}
+  </div>
+  {% include '_table_sort_assets.html' %}
+</body>
+</html>

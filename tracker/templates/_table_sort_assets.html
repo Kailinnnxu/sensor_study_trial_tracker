@@ -1,0 +1,191 @@
+<style>
+  table.sortable-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+  table.sortable-table.participants-table {
+    table-layout: auto;
+  }
+  table.sortable-table thead th {
+    color: var(--muted);
+    font-weight: 600;
+    text-align: left;
+    padding: 0.65rem 0.75rem;
+    border-bottom: 2px solid var(--border);
+    background: #fafbfc;
+    vertical-align: bottom;
+  }
+  table.sortable-table tbody td {
+    text-align: left;
+    padding: 0.65rem 0.75rem;
+    vertical-align: top;
+    border-bottom: none;
+  }
+  table.sortable-table tbody tr {
+    border-bottom: 1px solid var(--border);
+  }
+  th.sortable-header {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  th.sortable-header:hover {
+    color: var(--text);
+    background: #f0f3f6;
+  }
+  th.sortable-header .sort-icon {
+    display: inline-block;
+    margin-left: 0.35rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+    min-width: 0.75rem;
+  }
+  th.sortable-header.sort-asc .sort-icon {
+    color: var(--accent);
+  }
+  th.sortable-header.sort-desc .sort-icon {
+    color: var(--accent);
+  }
+  th.no-sort {
+    cursor: default;
+    white-space: nowrap;
+  }
+  td.actions-cell {
+    min-width: 11rem;
+    width: 14rem;
+  }
+  .actions-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+  }
+  .actions-inner form.inline {
+    display: block;
+    margin: 0;
+    width: 100%;
+  }
+  .actions-inner button {
+    width: 100%;
+    text-align: center;
+  }
+</style>
+<script>
+(function () {
+  function cellText(row, colIndex) {
+    const cell = row.cells[colIndex];
+    if (!cell) return "";
+    const explicit = cell.getAttribute("data-sort-value");
+    if (explicit !== null) return explicit.trim();
+    return cell.textContent.trim();
+  }
+
+  function sortKey(text) {
+    if (!text || text === "—") return { empty: true, value: "" };
+    const isoDates = text.match(/\d{4}-\d{2}-\d{2}/g);
+    if (isoDates) return { empty: false, value: isoDates.sort().pop() };
+    const dayMatch = text.match(/\bday\s+(\d+)\b/i);
+    if (dayMatch) return { empty: false, value: dayMatch[1].padStart(8, "0") };
+    const pendingDays = text.match(/\bdays\s+([\d,\s]+)/i);
+    if (pendingDays) {
+      const nums = pendingDays[1].split(",").map(function (p) {
+        return parseInt(p.trim(), 10);
+      }).filter(function (n) { return !isNaN(n); });
+      if (nums.length) return { empty: false, value: String(Math.min.apply(null, nums)).padStart(8, "0") };
+    }
+    const bracketList = text.match(/^\[([^\]]*)\]$/);
+    if (bracketList) {
+      const nums = bracketList[1].split(",").map(function (p) { return Number(p.trim()); })
+        .filter(function (n) { return !isNaN(n); });
+      if (nums.length) return { empty: false, value: String(Math.max.apply(null, nums)).padStart(8, "0") };
+    }
+    return { empty: false, value: text.toLowerCase() };
+  }
+
+  function compareRows(rowA, rowB, colIndex) {
+    const a = sortKey(cellText(rowA, colIndex));
+    const b = sortKey(cellText(rowB, colIndex));
+    if (a.empty && !b.empty) return 1;
+    if (!a.empty && b.empty) return -1;
+    if (a.value < b.value) return -1;
+    if (a.value > b.value) return 1;
+    return 0;
+  }
+
+  function clearSortState(table) {
+    table.querySelectorAll("th.sortable-header").forEach(function (header) {
+      delete header.dataset.sortDir;
+      header.classList.remove("sort-asc", "sort-desc");
+      header.setAttribute("aria-sort", "none");
+      var icon = header.querySelector(".sort-icon");
+      if (icon) icon.textContent = "↕";
+    });
+  }
+
+  function sortTable(table, colIndex, header) {
+    var current = header.dataset.sortDir;
+    var direction = current === "asc" ? "desc" : "asc";
+    clearSortState(table);
+    header.dataset.sortDir = direction;
+    header.classList.add(direction === "asc" ? "sort-asc" : "sort-desc");
+    header.setAttribute("aria-sort", direction === "asc" ? "ascending" : "descending");
+    var icon = header.querySelector(".sort-icon");
+    if (icon) icon.textContent = direction === "asc" ? "↑" : "↓";
+
+    var tbody = table.tBodies[0];
+    if (!tbody) return;
+    var rows = Array.prototype.slice.call(tbody.rows);
+    rows.sort(function (rowA, rowB) {
+      var cmp = compareRows(rowA, rowB, colIndex);
+      return direction === "asc" ? cmp : -cmp;
+    });
+    rows.forEach(function (row) { tbody.appendChild(row); });
+  }
+
+  function initTable(table) {
+    if (!table.tHead || !table.tBodies[0] || table.dataset.sortReady === "1") return;
+    table.dataset.sortReady = "1";
+
+    var headerRow = table.tHead.rows[0];
+    Array.prototype.forEach.call(headerRow.cells, function (header) {
+      if (header.classList.contains("no-sort")) return;
+      header.classList.add("sortable-header");
+      header.setAttribute("role", "button");
+      header.setAttribute("tabindex", "0");
+      header.setAttribute("aria-sort", "none");
+      header.title = "Click to sort";
+      if (!header.querySelector(".sort-icon")) {
+        var icon = document.createElement("span");
+        icon.className = "sort-icon";
+        icon.setAttribute("aria-hidden", "true");
+        icon.textContent = "↕";
+        header.appendChild(icon);
+      }
+    });
+
+    table.tHead.addEventListener("click", function (event) {
+      var header = event.target.closest("th.sortable-header");
+      if (!header || !table.tHead.contains(header)) return;
+      sortTable(table, header.cellIndex, header);
+    });
+    table.tHead.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      var header = event.target.closest("th.sortable-header");
+      if (!header) return;
+      event.preventDefault();
+      sortTable(table, header.cellIndex, header);
+    });
+  }
+
+  function initAllTables() {
+    document.querySelectorAll("table.sortable-table").forEach(initTable);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initAllTables);
+  } else {
+    initAllTables();
+  }
+})();
+</script>
