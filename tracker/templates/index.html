@@ -56,6 +56,7 @@
       font-weight: 600;
     }
     .badge.done { background: #dafbe1; color: var(--done); }
+    .badge.done { background: #dafbe1; color: var(--done); }
     .badge.visit-scheduled { background: #dafbe1; color: var(--done); }
     .badge.no-longer-interested { background: #ffebe9; color: var(--review); }
     .badge.pending { background: #fff8c5; color: var(--pending); }
@@ -141,7 +142,7 @@
 <body>
   <nav class="nav" style="margin-bottom: 1.5rem;">
     <a href="{{ url_for('index') }}" style="color: var(--accent); text-decoration: none; font-weight: 600; margin-right: 1rem;">Dashboard</a>
-    <a href="{{ url_for('outcome_registry') }}" style="color: var(--accent); text-decoration: none; font-weight: 600;">Outcome registry</a>
+    <a href="{{ url_for('outcome_registry') }}" style="color: var(--accent); text-decoration: none; font-weight: 600;">Repository</a>
   </nav>
   <h1>Participant Touchpoint Tracker</h1>
   <p class="muted">Study ID only — no PHI stored in this system.</p>
@@ -218,7 +219,11 @@
   {% for phase in phases %}
   <div class="card">
     <h2>{{ phase.title }}</h2>
-    {% with rows=phase.rows %}
+    <p class="muted phase-closed-summary" data-phase-closed-summary="{{ phase.key }}" style="margin-top: 0;{% if not phase.closed_count %} display: none;{% endif %}">
+      {% if phase.closed_count %}{{ phase.closed_count }} closed record(s) in the
+      <a href="{{ url_for('outcome_registry') }}">repository</a>.{% endif %}
+    </p>
+    {% with rows=phase.rows, show_actions=phase.show_actions, action_mode=phase.action_mode %}
     {% include '_participants_table.html' %}
     {% endwith %}
   </div>
@@ -248,5 +253,6 @@
     </table>
   </div>
   {% include '_table_sort_assets.html' %}
+  {% include '_outcome_actions.html' %}
 </body>
 </html>

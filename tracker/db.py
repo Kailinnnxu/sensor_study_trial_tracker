@@ -12,6 +12,7 @@ from typing import Generator, Iterable
 
 from tracker.config import (
     database_path,
+    TOUCHPOINT_OUTCOME_DONE,
     TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
     TOUCHPOINT_OUTCOME_PENDING,
     TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
@@ -457,6 +458,7 @@ def set_touchpoint_outcome(
         TOUCHPOINT_OUTCOME_PENDING,
         TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
         TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
+        TOUCHPOINT_OUTCOME_DONE,
     ):
         raise ValueError(f"Invalid touchpoint outcome: {outcome}")
 

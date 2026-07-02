@@ -7,7 +7,7 @@ import io
 from datetime import date
 from typing import Any
 
-from flask import Flask, flash, make_response, redirect, render_template, request, url_for
+from flask import Flask, flash, jsonify, make_response, redirect, render_template, request, url_for
 
 from tracker.env import load_env
 from tracker.config import (
@@ -15,7 +15,11 @@ from tracker.config import (
     DASHBOARD_PHASES,
     TOUCHPOINT_DEFINITIONS,
     TOUCHPOINT_BY_KEY,
+    TOUCHPOINT_OUTCOME_DONE,
     TOUCHPOINT_OUTCOME_LABELS,
+    TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
+    TOUCHPOINT_OUTCOME_PENDING,
+    TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
     TOUCHPOINT_OUTCOMES,
     flask_secret_key,
     get_touchpoints_for_event_type,
@@ -59,7 +63,11 @@ def _touchpoint_due_info(
     }
 
 
-def build_dashboard_rows(*, anchor_event_type: str | None = None) -> list[dict[str, Any]]:
+def build_dashboard_rows(
+    *,
+    anchor_event_type: str | None = None,
+    pending_only: bool = True,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     study_ids = get_all_study_ids()
 
@@ -78,6 +86,9 @@ def build_dashboard_rows(*, anchor_event_type: str | None = None) -> list[dict[s
             status = statuses.get(tp.key)
             if status is None:
                 status = get_or_create_touchpoint_status(study_id, tp.key)
+
+            if pending_only and status.outcome != TOUCHPOINT_OUTCOME_PENDING:
+                continue
 
             due = _touchpoint_due_info(
                 tp.offsets, status.offsets_sent, anchor.event_date, status.done
@@ -108,15 +119,60 @@ def build_dashboard_rows(*, anchor_event_type: str | None = None) -> list[dict[s
     return rows
 
 
+def _closed_count_for_phase(anchor_event_type: str) -> int:
+    return sum(
+        1
+        for record in get_closed_touchpoint_records()
+        if TOUCHPOINT_BY_KEY.get(record.touchpoint_key)
+        and TOUCHPOINT_BY_KEY[record.touchpoint_key].anchor_event_type
+        == anchor_event_type
+    )
+
+
 def build_dashboard_phases() -> list[dict[str, Any]]:
     return [
         {
             "key": phase["key"],
             "title": phase["title"],
-            "rows": build_dashboard_rows(anchor_event_type=phase["anchor_event_type"]),
+            "rows": build_dashboard_rows(
+                anchor_event_type=phase["anchor_event_type"],
+                pending_only=True,
+            ),
+            "closed_count": _closed_count_for_phase(phase["anchor_event_type"]),
+            "show_actions": bool(phase.get("show_actions", True)),
+            "action_mode": str(phase.get("action_mode", "outcomes")),
         }
         for phase in DASHBOARD_PHASES
     ]
+
+
+def _redirect_after_outcome(outcome: str) -> str:
+    if outcome == TOUCHPOINT_OUTCOME_PENDING:
+        return url_for("index")
+    return url_for("outcome_registry")
+
+
+def _outcome_message(study_id: str, outcome: str) -> str:
+    if outcome == TOUCHPOINT_OUTCOME_PENDING:
+        return f"Returned {study_id} to the active dashboard."
+    if outcome == TOUCHPOINT_OUTCOME_VISIT_SCHEDULED:
+        return f"{study_id} moved to repository (visit scheduled)."
+    if outcome == TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED:
+        return f"{study_id} moved to repository (no longer interested)."
+    if outcome == TOUCHPOINT_OUTCOME_DONE:
+        return f"{study_id} moved to repository (done)."
+    return f"Updated {study_id}."
+
+
+def _phase_closed_counts() -> dict[str, int]:
+    return {
+        phase["key"]: _closed_count_for_phase(phase["anchor_event_type"])
+        for phase in DASHBOARD_PHASES
+    }
+
+
+def _wants_json_response() -> bool:
+    return request.headers.get("X-Requested-With") == "fetch"
 
 
 def _enrich_outcome_records(records: list) -> list[dict[str, Any]]:
@@ -158,11 +214,6 @@ def _enrich_outcome_history(entries: list) -> list[dict[str, Any]]:
 
 
 def _outcome_counts() -> dict[str, int]:
-    from tracker.config import (
-        TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
-        TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
-    )
-
     all_closed = get_closed_touchpoint_records()
     return {
         "visit_scheduled": sum(
@@ -173,6 +224,8 @@ def _outcome_counts() -> dict[str, int]:
             for r in all_closed
             if r.outcome == TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED
         ),
+        "done": sum(1 for r in all_closed if r.outcome == TOUCHPOINT_OUTCOME_DONE),
+        "total": len(all_closed),
     }
 
 
@@ -260,10 +313,31 @@ def create_app() -> Flask:
     )
     def set_outcome(study_id: str, touchpoint_key: str, outcome: str):
         if outcome not in TOUCHPOINT_OUTCOMES:
-            flash(f"Invalid outcome: {outcome}", "error")
+            message = f"Invalid outcome: {outcome}"
+            if _wants_json_response():
+                return jsonify({"success": False, "message": message}), 400
+            flash(message, "error")
             return redirect(url_for("index"))
+
         set_touchpoint_outcome(study_id, touchpoint_key, outcome)
-        return redirect(request.referrer or url_for("index"))
+        message = _outcome_message(study_id, outcome)
+
+        if _wants_json_response():
+            return jsonify(
+                {
+                    "success": True,
+                    "message": message,
+                    "study_id": study_id,
+                    "touchpoint_key": touchpoint_key,
+                    "outcome": outcome,
+                    "remove_row": True,
+                    "counts": _outcome_counts(),
+                    "phase_closed_counts": _phase_closed_counts(),
+                }
+            )
+
+        flash(message, "success")
+        return redirect(_redirect_after_outcome(outcome))
 
     @app.route("/outcomes")
     def outcome_registry():

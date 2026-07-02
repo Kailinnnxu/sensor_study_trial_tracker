@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from unittest import mock
 
 from tracker.config import (
+    TOUCHPOINT_OUTCOME_DONE,
     TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
     TOUCHPOINT_OUTCOME_PENDING,
     TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
@@ -25,6 +26,35 @@ from tracker.engine.reminder import run_reminders
 from tracker.ingestion.parsers import parse_body
 from tracker.ingestion.run import _match_source, process_email
 from tracker.ingestion.gmail_client import EmailMessage
+
+
+class TestConfig:
+    def test_database_path_stable_across_cwd(self, monkeypatch, tmp_path):
+        import os
+
+        from tracker.config import PROJECT_ROOT, database_path
+
+        db_file = PROJECT_ROOT / "data" / "tracker.db"
+        monkeypatch.setenv("TRACKER_DATABASE_PATH", "data/tracker.db")
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            assert database_path() == db_file.resolve()
+        finally:
+            os.chdir(original_cwd)
+
+    def test_anchor_event_persists_after_reopen(self, db_path):
+        from tracker.db import get_anchor_events, upsert_anchor_event
+        from datetime import date
+
+        upsert_anchor_event("PERSIST1", "assessment_complete", date(2026, 6, 1), "manual")
+        assert len(get_anchor_events()) == 1
+
+        from tracker.db import init_db
+
+        init_db(db_path)
+        assert get_anchor_events(study_id="PERSIST1")[0].study_id == "PERSIST1"
 
 
 class TestParsers:
@@ -452,6 +482,72 @@ class TestOutcomeRegistry:
         assert b"R4" in resp.data
         assert b"visit_scheduled" in resp.data or b"Visit scheduled" in resp.data
 
+    def test_closed_participants_hidden_from_dashboard(self, db_path):
+        from tracker.web.app import build_dashboard_rows, create_app
+
+        upsert_anchor_event("R5", "assessment_complete", date(2025, 7, 1), "manual")
+        set_touchpoint_outcome("R5", "schedule_home_visit", TOUCHPOINT_OUTCOME_VISIT_SCHEDULED)
+
+        rows = build_dashboard_rows(anchor_event_type="assessment_complete", pending_only=True)
+        study_ids = [r["study_id"] for r in rows]
+        assert "R5" not in study_ids
+
+        app = create_app()
+        client = app.test_client()
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert b"R5" not in resp.data
+
+    def test_set_outcome_redirects_to_repository(self, db_path):
+        from tracker.web.app import create_app
+
+        upsert_anchor_event("R6", "assessment_complete", date(2025, 8, 1), "manual")
+        app = create_app()
+        client = app.test_client()
+        resp = client.post(
+            "/touchpoint/R6/schedule_home_visit/outcome/visit_scheduled",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert "/outcomes" in resp.headers["Location"]
+
+    def test_reset_outcome_returns_to_dashboard(self, db_path):
+        from tracker.web.app import create_app
+
+        upsert_anchor_event("R7", "assessment_complete", date(2025, 9, 1), "manual")
+        set_touchpoint_outcome("R7", "schedule_home_visit", TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED)
+
+        app = create_app()
+        client = app.test_client()
+        resp = client.post(
+            "/touchpoint/R7/schedule_home_visit/outcome/pending",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/")
+
+    def test_set_outcome_json_no_page_reload(self, db_path):
+        from tracker.web.app import create_app
+
+        upsert_anchor_event("R8", "assessment_complete", date(2025, 10, 1), "manual")
+        app = create_app()
+        client = app.test_client()
+        resp = client.post(
+            "/touchpoint/R8/schedule_home_visit/outcome/visit_scheduled",
+            headers={
+                "X-Requested-With": "fetch",
+                "Accept": "application/json",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.is_json
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["remove_row"] is True
+        assert data["study_id"] == "R8"
+        assert data["counts"]["visit_scheduled"] == 1
+        assert data["phase_closed_counts"]["phase1"] == 1
+
 
 class TestActions:
     def test_email_message_differs_by_offset(self):
@@ -518,3 +614,40 @@ class TestWebDashboard:
         assert "data-sort-value" in html
         assert "Click to sort" in html
         assert "function initAllTables" in html
+
+    def test_phase2_table_has_mark_done_action(self, db_path):
+        from datetime import date
+        from tracker.db import upsert_anchor_event
+        from tracker.web.app import create_app
+
+        upsert_anchor_event("P2A", "sensor_collection_start", date(2026, 6, 25), "manual")
+        upsert_anchor_event("P1A", "assessment_complete", date(2026, 6, 1), "manual")
+
+        app = create_app()
+        html = app.test_client().get("/").data.decode()
+        phase1_start = html.index("Phase 1 — Home visit scheduling")
+        phase2_start = html.index("Phase 2 — Sensor collection")
+        phase1_section = html[phase1_start:phase2_start]
+        phase2_section = html[phase2_start:]
+
+        assert "No longer interested" in phase1_section
+        assert "Visit scheduled" in phase1_section
+        assert "Mark done" in phase2_section
+        assert "No longer interested" not in phase2_section
+        assert "Visit scheduled" not in phase2_section
+        assert 'class="no-sort">Actions</th>' in phase1_section
+        assert 'class="no-sort">Actions</th>' in phase2_section
+
+    def test_mark_done_stops_phase2_reminders(self, db_path):
+        from datetime import date, timedelta
+        from tracker.config import TOUCHPOINT_OUTCOME_DONE
+        from tracker.db import set_touchpoint_outcome, upsert_anchor_event
+
+        today = date(2026, 6, 27)
+        anchor_date = today - timedelta(days=2)
+        upsert_anchor_event("P2R", "sensor_collection_start", anchor_date, "manual")
+        set_touchpoint_outcome("P2R", "sensor_collection_followup", TOUCHPOINT_OUTCOME_DONE)
+
+        with mock.patch("tracker.engine.reminder.dispatch_action") as dispatch:
+            run_reminders(today=today)
+            dispatch.assert_not_called()

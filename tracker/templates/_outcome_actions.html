@@ -1,0 +1,146 @@
+<style>
+  .outcome-toast {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 1000;
+    max-width: 22rem;
+    padding: 0.75rem 1rem;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    opacity: 0;
+    transform: translateY(-0.5rem);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    pointer-events: none;
+  }
+  .outcome-toast.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .outcome-toast.success { background: #dafbe1; color: #1a7f37; }
+  .outcome-toast.error { background: #ffebe9; color: #cf222e; }
+  button.outcome-busy {
+    opacity: 0.65;
+    cursor: wait;
+  }
+</style>
+<div id="outcome-toast" class="outcome-toast" role="status" aria-live="polite"></div>
+<script>
+(function () {
+  var toastTimer = null;
+
+  function showToast(message, kind) {
+    var toast = document.getElementById("outcome-toast");
+    if (!toast) return;
+    toast.textContent = message;
+    toast.className = "outcome-toast visible " + (kind || "success");
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      toast.classList.remove("visible");
+    }, 3200);
+  }
+
+  function updateClosedSummary(phaseClosedCounts) {
+    if (!phaseClosedCounts) return;
+    Object.keys(phaseClosedCounts).forEach(function (phaseKey) {
+      var el = document.querySelector(
+        '[data-phase-closed-summary="' + phaseKey + '"]'
+      );
+      if (!el) return;
+      var count = phaseClosedCounts[phaseKey];
+      if (count > 0) {
+        el.style.display = "";
+        el.innerHTML =
+          count +
+          ' closed record(s) in the <a href="/outcomes">repository</a>.';
+      } else {
+        el.style.display = "none";
+        el.textContent = "";
+      }
+    });
+  }
+
+  function updateRepositoryStats(counts) {
+    if (!counts) return;
+    var mappings = [
+      ["visit_scheduled", ".repo-stat-visit-scheduled"],
+      ["no_longer_interested", ".repo-stat-no-longer-interested"],
+      ["done", ".repo-stat-done"],
+    ];
+    mappings.forEach(function (pair) {
+      var el = document.querySelector(pair[1]);
+      if (el) el.textContent = String(counts[pair[0]] || 0);
+    });
+    var shown = document.querySelector(".repo-stat-shown");
+    if (shown) {
+      var tbody = document.querySelector(".repository-table tbody");
+      shown.textContent = String(tbody ? tbody.rows.length : 0);
+    }
+  }
+
+  function showEmptyTable(wrap) {
+    if (!wrap || wrap.querySelector(".empty")) return;
+    var table = wrap.querySelector("table");
+    if (table) table.remove();
+    var empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = wrap.getAttribute("data-empty-message") || "No records.";
+    wrap.appendChild(empty);
+  }
+
+  function handleOutcomeSubmit(event) {
+    var form = event.target.closest("form.outcome-form");
+    if (!form) return;
+    event.preventDefault();
+
+    var button = form.querySelector('button[type="submit"]');
+    if (button && button.classList.contains("outcome-busy")) return;
+
+    if (button) {
+      button.classList.add("outcome-busy");
+      button.disabled = true;
+    }
+
+    fetch(form.action, {
+      method: "POST",
+      headers: {
+        "X-Requested-With": "fetch",
+        Accept: "application/json",
+      },
+      credentials: "same-origin",
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok) throw new Error(data.message || "Request failed");
+          return data;
+        });
+      })
+      .then(function (data) {
+        if (data.remove_row) {
+          var row = form.closest("tr");
+          var wrap = row && row.closest(".table-wrap");
+          if (row) row.remove();
+          if (wrap) {
+            var tbody = wrap.querySelector("tbody");
+            if (!tbody || tbody.rows.length === 0) showEmptyTable(wrap);
+          }
+        }
+        updateClosedSummary(data.phase_closed_counts);
+        updateRepositoryStats(data.counts);
+        showToast(data.message, "success");
+      })
+      .catch(function (err) {
+        showToast(err.message || "Action failed", "error");
+      })
+      .finally(function () {
+        if (button) {
+          button.classList.remove("outcome-busy");
+          button.disabled = false;
+        }
+      });
+  }
+
+  document.addEventListener("submit", handleOutcomeSubmit);
+})();
+</script>

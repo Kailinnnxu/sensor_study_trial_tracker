@@ -8,6 +8,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# Tracker project root (parent of the `tracker` package).
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_project_path(raw: str) -> Path:
+    """Resolve config paths relative to PROJECT_ROOT, not the process cwd."""
+    path = Path(raw)
+    if path.is_absolute():
+        return path
+    return (PROJECT_ROOT / path).resolve()
+
+
 @dataclass(frozen=True)
 class TouchpointDefinition:
     key: str
@@ -94,16 +106,20 @@ def get_touchpoints_for_event_type(event_type: str) -> list[TouchpointDefinition
     return [tp for tp in TOUCHPOINT_DEFINITIONS if tp.anchor_event_type == event_type]
 
 
-DASHBOARD_PHASES: tuple[dict[str, str], ...] = (
+DASHBOARD_PHASES: tuple[dict[str, str | bool], ...] = (
     {
         "key": "phase1",
         "title": "Phase 1 — Home visit scheduling",
         "anchor_event_type": "assessment_complete",
+        "show_actions": True,
+        "action_mode": "outcomes",
     },
     {
         "key": "phase2",
         "title": "Phase 2 — Sensor collection",
         "anchor_event_type": "sensor_collection_start",
+        "show_actions": True,
+        "action_mode": "mark_done",
     },
 )
 
@@ -118,15 +134,17 @@ def _env(key: str, default: str | None = None) -> str | None:
 
 def database_path() -> Path:
     raw = _env("TRACKER_DATABASE_PATH", "data/tracker.db")
-    return Path(raw)
+    return _resolve_project_path(raw)
 
 
 def gmail_credentials_path() -> Path:
-    return Path(_env("GMAIL_CREDENTIALS_PATH", "credentials/gmail_credentials.json"))
+    return _resolve_project_path(
+        _env("GMAIL_CREDENTIALS_PATH", "credentials/gmail_credentials.json")
+    )
 
 
 def gmail_token_path() -> Path:
-    return Path(_env("GMAIL_TOKEN_PATH", "credentials/gmail_token.json"))
+    return _resolve_project_path(_env("GMAIL_TOKEN_PATH", "credentials/gmail_token.json"))
 
 
 def kailin_email() -> str:
@@ -164,15 +182,18 @@ def app_url() -> str:
 TOUCHPOINT_OUTCOME_PENDING = "pending"
 TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED = "no_longer_interested"
 TOUCHPOINT_OUTCOME_VISIT_SCHEDULED = "visit_scheduled"
+TOUCHPOINT_OUTCOME_DONE = "done"
 
 TOUCHPOINT_OUTCOMES: tuple[str, ...] = (
     TOUCHPOINT_OUTCOME_PENDING,
     TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
     TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
+    TOUCHPOINT_OUTCOME_DONE,
 )
 
 TOUCHPOINT_OUTCOME_LABELS: dict[str, str] = {
     TOUCHPOINT_OUTCOME_PENDING: "Pending",
     TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED: "No longer interested",
     TOUCHPOINT_OUTCOME_VISIT_SCHEDULED: "Visit scheduled",
+    TOUCHPOINT_OUTCOME_DONE: "Done",
 }

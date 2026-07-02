@@ -1,3 +1,4 @@
+<div class="table-wrap participants-table-wrap" data-empty-message="No active participants in this phase. Closed records are in the repository.">
 {% if rows %}
 <table class="sortable-table participants-table">
   <thead>
@@ -9,13 +10,15 @@
       <th>Status</th>
       <th>Offsets sent</th>
       <th>Next due</th>
+      {% if show_actions %}
       <th class="no-sort">Actions</th>
+      {% endif %}
     </tr>
   </thead>
   <tbody>
     {% for row in rows %}
       {% for tp in row.touchpoints %}
-      <tr>
+      <tr data-study-id="{{ row.study_id }}" data-touchpoint-key="{{ tp.key }}">
         <td class="study-id" data-sort-value="{{ row.study_id }}">{{ row.study_id }}</td>
         <td data-sort-value="{{ tp.label }}">
           {{ tp.label }}<br><small class="muted">{{ tp.key }}</small>
@@ -33,6 +36,8 @@
         <td data-sort-value="{{ tp.outcome }}">
           {% if tp.outcome == 'pending' %}
           <span class="badge pending">Pending</span>
+          {% elif tp.outcome == 'done' %}
+          <span class="badge done">Done{% if tp.done_date %} ({{ tp.done_date }}){% endif %}</span>
           {% elif tp.outcome == 'visit_scheduled' %}
           <span class="badge visit-scheduled">Visit scheduled{% if tp.done_date %} ({{ tp.done_date }}){% endif %}</span>
           {% elif tp.outcome == 'no_longer_interested' %}
@@ -55,27 +60,42 @@
           —
           {% endif %}
         </td>
+        {% if show_actions %}
         <td class="actions-cell">
-          <div class="actions-inner">
-            {% if tp.outcome == 'pending' %}
-            <form class="inline" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='no_longer_interested') }}">
-              <button type="submit" class="danger">No longer interested</button>
-            </form>
-            <form class="inline" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='visit_scheduled') }}">
-              <button type="submit">Visit scheduled</button>
-            </form>
+          <div class="actions-inner{% if action_mode == 'mark_done' %} actions-inner-compact{% endif %}">
+            {% if action_mode == 'mark_done' %}
+              {% if tp.outcome == 'pending' %}
+              <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='done') }}">
+                <button type="submit">Mark done</button>
+              </form>
+              {% else %}
+              <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='pending') }}">
+                <button type="submit" class="secondary">Undo</button>
+              </form>
+              {% endif %}
             {% else %}
-            <form class="inline" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='pending') }}">
-              <button type="submit" class="secondary">Reset to pending</button>
-            </form>
+              {% if tp.outcome == 'pending' %}
+              <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='no_longer_interested') }}">
+                <button type="submit" class="danger">No longer interested</button>
+              </form>
+              <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='visit_scheduled') }}">
+                <button type="submit">Visit scheduled</button>
+              </form>
+              {% else %}
+              <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='pending') }}">
+                <button type="submit" class="secondary">Reset to pending</button>
+              </form>
+              {% endif %}
             {% endif %}
           </div>
         </td>
+        {% endif %}
       </tr>
       {% endfor %}
     {% endfor %}
   </tbody>
 </table>
 {% else %}
-<p class="empty">No participants in this phase yet.</p>
+<p class="empty">No active participants in this phase. Closed records are in the <a href="{{ url_for('outcome_registry') }}">repository</a>.</p>
 {% endif %}
+</div>

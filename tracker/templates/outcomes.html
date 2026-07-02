@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Outcome registry — Participant Touchpoint Tracker</title>
+  <title>Repository — Participant Touchpoint Tracker</title>
   <style>
     :root {
       --bg: #f5f6f8;
@@ -63,6 +63,7 @@
     }
     .badge.visit-scheduled { background: #dafbe1; color: var(--done); }
     .badge.no-longer-interested { background: #ffebe9; color: var(--review); }
+    .badge.done { background: #ddf4ff; color: var(--accent); }
     .badge.pending { background: #fff8c5; color: var(--pending); }
     .study-id {
       font-weight: 700;
@@ -110,16 +111,45 @@
     }
     .stats strong { color: var(--text); }
     .muted { color: var(--muted); }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.35rem 0.65rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #eaeef2;
+      color: var(--text);
+    }
+    .flash {
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      margin-bottom: 1rem;
+      font-size: 0.95rem;
+    }
+    .flash.success { background: #dafbe1; color: var(--done); }
+    .flash.error { background: #ffebe9; color: var(--review); }
   </style>
 </head>
 <body>
   <nav class="nav">
-    <a href="{{ url_for('index') }}">← Dashboard</a>
-    <a href="{{ url_for('outcome_registry') }}" class="active">Outcome registry</a>
+    <a href="{{ url_for('index') }}">Dashboard</a>
+    <a href="{{ url_for('outcome_registry') }}" class="active">Repository</a>
   </nav>
 
-  <h1>Outcome registry</h1>
-  <p class="muted">Closed touchpoints: visit scheduled and no longer interested.</p>
+  <h1>Repository</h1>
+  <p class="muted">Closed participants: visit scheduled, no longer interested, and completed sensor collection.</p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+  {% for category, message in messages %}
+  <div class="flash {{ category }}">{{ message }}</div>
+  {% endfor %}
+  {% endif %}
+  {% endwith %}
 
   <div class="card">
     <div class="toolbar">
@@ -127,16 +157,19 @@
         <a href="{{ url_for('outcome_registry') }}" {% if not filter_outcome %}class="active"{% endif %}>All closed</a>
         <a href="{{ url_for('outcome_registry', outcome='visit_scheduled') }}" {% if filter_outcome == 'visit_scheduled' %}class="active"{% endif %}>Visit scheduled</a>
         <a href="{{ url_for('outcome_registry', outcome='no_longer_interested') }}" {% if filter_outcome == 'no_longer_interested' %}class="active"{% endif %}>No longer interested</a>
+        <a href="{{ url_for('outcome_registry', outcome='done') }}" {% if filter_outcome == 'done' %}class="active"{% endif %}>Done</a>
       </div>
       <a class="btn" href="{{ url_for('outcome_registry_csv', outcome=filter_outcome) }}">Download CSV</a>
     </div>
 
     <div class="stats">
-      <span><strong>{{ counts.visit_scheduled }}</strong> visit scheduled</span>
-      <span><strong>{{ counts.no_longer_interested }}</strong> no longer interested</span>
-      <span><strong>{{ records|length }}</strong> shown</span>
+      <span><strong class="repo-stat-visit-scheduled">{{ counts.visit_scheduled }}</strong> visit scheduled</span>
+      <span><strong class="repo-stat-no-longer-interested">{{ counts.no_longer_interested }}</strong> no longer interested</span>
+      <span><strong class="repo-stat-done">{{ counts.done }}</strong> done</span>
+      <span><strong class="repo-stat-shown">{{ records|length }}</strong> shown</span>
     </div>
 
+    <div class="table-wrap repository-table" data-empty-message="No closed participants yet. Mark visit scheduled or no longer interested on the dashboard to move them here.">
     {% if records %}
     <table class="sortable-table">
       <thead>
@@ -148,15 +181,18 @@
           <th>Anchor event</th>
           <th>Email received (UTC)</th>
           <th>Reminders sent</th>
+          <th class="no-sort">Actions</th>
         </tr>
       </thead>
       <tbody>
         {% for r in records %}
-        <tr>
+        <tr data-study-id="{{ r.study_id }}" data-touchpoint-key="{{ r.touchpoint_key }}">
           <td class="study-id" data-sort-value="{{ r.study_id }}">{{ r.study_id }}</td>
           <td data-sort-value="{{ r.touchpoint_label }}">{{ r.touchpoint_label }}<br><small class="muted">{{ r.touchpoint_key }}</small></td>
           <td data-sort-value="{{ r.outcome }}">
-            {% if r.outcome == 'visit_scheduled' %}
+            {% if r.outcome == 'done' %}
+            <span class="badge done">{{ r.outcome_label }}</span>
+            {% elif r.outcome == 'visit_scheduled' %}
             <span class="badge visit-scheduled">{{ r.outcome_label }}</span>
             {% elif r.outcome == 'no_longer_interested' %}
             <span class="badge no-longer-interested">{{ r.outcome_label }}</span>
@@ -174,13 +210,19 @@
             {% endif %}
           </td>
           <td class="offsets" data-sort-value="{{ r.offsets_sent | join(',') }}">{{ r.offsets_sent or '[]' }}</td>
+          <td>
+            <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=r.study_id, touchpoint_key=r.touchpoint_key, outcome='pending') }}">
+              <button type="submit" class="secondary">Return to dashboard</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
     {% else %}
-    <p class="empty">No closed touchpoints yet.</p>
+    <p class="empty">No closed participants yet. Mark visit scheduled or no longer interested on the dashboard to move them here.</p>
     {% endif %}
+    </div>
   </div>
 
   <div class="card">
@@ -213,5 +255,6 @@
     {% endif %}
   </div>
   {% include '_table_sort_assets.html' %}
+  {% include '_outcome_actions.html' %}
 </body>
 </html>
