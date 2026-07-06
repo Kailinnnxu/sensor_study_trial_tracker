@@ -242,6 +242,10 @@ def create_app() -> Flask:
     def health():
         return {"status": "ok"}
 
+    @app.route("/brochure")
+    def brochure():
+        return render_template("brochure.html")
+
     @app.route("/")
     def index():
         return render_template(

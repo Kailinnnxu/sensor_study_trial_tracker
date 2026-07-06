@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Actipal brochure — Participant Touchpoint Tracker</title>
+  <style>
+    :root {
+      --bg: #f5f6f8;
+      --card: #fff;
+      --border: #d8dce3;
+      --text: #1a1d23;
+      --muted: #5c6570;
+      --accent: #1f6feb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 2rem;
+      line-height: 1.5;
+    }
+    h1 { margin-top: 0; font-size: 1.75rem; }
+    .nav { margin-bottom: 1.5rem; }
+    .nav a {
+      color: var(--accent);
+      text-decoration: none;
+      margin-right: 1rem;
+      font-weight: 600;
+    }
+    .nav a:hover { text-decoration: underline; }
+    .nav a.active { color: var(--text); }
+    .muted { color: var(--muted); }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .toolbar a.btn {
+      background: var(--accent);
+      color: #fff;
+      border-radius: 6px;
+      padding: 0.45rem 0.85rem;
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      overflow: hidden;
+    }
+    .pdf-frame {
+      width: 100%;
+      height: min(85vh, 1100px);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <a href="{{ url_for('index') }}">Dashboard</a>
+    <a href="{{ url_for('outcome_registry') }}">Repository</a>
+    <a href="{{ url_for('brochure') }}" class="active">Brochure</a>
+  </nav>
+
+  <h1>Actipal one-pager</h1>
+  <p class="muted">Study brochure / poster for sharing with participants and collaborators.</p>
+
+  <div class="toolbar">
+    <a class="btn" href="{{ url_for('static', filename='brochures/actipal-one-pager.pdf') }}" download>Download PDF</a>
+    <a class="btn" href="{{ url_for('static', filename='brochures/actipal-one-pager.pdf') }}" target="_blank" rel="noopener">Open in new tab</a>
+  </div>
+
+  <div class="card">
+    <iframe
+      class="pdf-frame"
+      src="{{ url_for('static', filename='brochures/actipal-one-pager.pdf') }}"
+      title="Actipal one-pager brochure"
+    ></iframe>
+  </div>
+</body>
+</html>

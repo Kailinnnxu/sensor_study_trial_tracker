@@ -615,6 +615,20 @@ class TestWebDashboard:
         assert "Click to sort" in html
         assert "function initAllTables" in html
 
+    def test_brochure_page_embeds_pdf(self, db_path):
+        from tracker.web.app import create_app
+
+        app = create_app()
+        client = app.test_client()
+        resp = client.get("/brochure")
+        assert resp.status_code == 200
+        assert b"Actipal one-pager" in resp.data
+        assert b"brochures/actipal-one-pager.pdf" in resp.data
+
+        pdf = client.get("/static/brochures/actipal-one-pager.pdf")
+        assert pdf.status_code == 200
+        assert pdf.mimetype == "application/pdf"
+
     def test_phase2_table_has_mark_done_action(self, db_path):
         from datetime import date
         from tracker.db import upsert_anchor_event
