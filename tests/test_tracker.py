@@ -623,7 +623,12 @@ class TestWebDashboard:
         resp = client.get("/brochure")
         assert resp.status_code == 200
         assert b"Actipal one-pager" in resp.data
-        assert b"brochures/actipal-one-pager.pdf" in resp.data
+        assert b"brochures/actipal-one-pager.png" in resp.data
+        assert b"brochure-image" in resp.data
+
+        png = client.get("/static/brochures/actipal-one-pager.png")
+        assert png.status_code == 200
+        assert png.mimetype == "image/png"
 
         pdf = client.get("/static/brochures/actipal-one-pager.pdf")
         assert pdf.status_code == 200
