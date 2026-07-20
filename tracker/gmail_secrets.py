@@ -84,12 +84,18 @@ def ensure_gmail_files() -> None:
     if token_env:
         token_path = gmail_token_path()
         token_path.parent.mkdir(parents=True, exist_ok=True)
-        env_name = (
-            "GMAIL_TOKEN_JSON"
-            if os.environ.get("GMAIL_TOKEN_JSON")
-            else "GMAIL_TOKEN_B64"
-        )
-        token_path.write_text(_decode_secret(token_env, env_name=env_name), encoding="utf-8")
+        # Only seed from env when no token file exists. Otherwise a stale
+        # GMAIL_TOKEN_B64 would overwrite a refreshed/re-authed token and
+        # cause invalid_grant on the next refresh.
+        if not token_path.exists():
+            env_name = (
+                "GMAIL_TOKEN_JSON"
+                if os.environ.get("GMAIL_TOKEN_JSON")
+                else "GMAIL_TOKEN_B64"
+            )
+            token_path.write_text(
+                _decode_secret(token_env, env_name=env_name), encoding="utf-8"
+            )
 
 
 def persist_token(creds_json: str) -> None:

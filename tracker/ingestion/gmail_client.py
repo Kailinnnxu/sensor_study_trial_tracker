@@ -7,7 +7,6 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parseaddr
-from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -91,11 +90,14 @@ def get_gmail_service():
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            persist_token(creds.to_json())
-        else:
-            if not token_path.exists():
-                raise GmailSetupError(diag)
+            try:
+                creds.refresh(Request())
+                persist_token(creds.to_json())
+            except Exception:
+                # Dead refresh token (invalid_grant) — fall through to browser OAuth.
+                creds = None
+
+        if not creds or not creds.valid:
             if not creds_path.exists():
                 raise GmailSetupError(diag)
             flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
