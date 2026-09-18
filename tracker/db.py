@@ -12,10 +12,10 @@ from typing import Generator, Iterable
 
 from tracker.config import (
     database_path,
-    TOUCHPOINT_OUTCOME_DONE,
-    TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
+    LEGACY_OUTCOME_MAP,
+    TOUCHPOINT_OUTCOME_ENROLLED,
     TOUCHPOINT_OUTCOME_PENDING,
-    TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
+    TOUCHPOINT_OUTCOMES,
 )
 
 
@@ -186,7 +186,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             f"""
             UPDATE touchpoint_status
-            SET outcome = '{TOUCHPOINT_OUTCOME_VISIT_SCHEDULED}'
+            SET outcome = '{TOUCHPOINT_OUTCOME_ENROLLED}'
             WHERE done = 1
             """
         )
@@ -208,6 +208,24 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             FROM touchpoint_status
             WHERE outcome != '{TOUCHPOINT_OUTCOME_PENDING}'
             """
+        )
+
+    for old, new in LEGACY_OUTCOME_MAP.items():
+        conn.execute(
+            "UPDATE touchpoint_status SET outcome = ? WHERE outcome = ?",
+            (new, old),
+        )
+        conn.execute(
+            "UPDATE touchpoint_outcome_log SET outcome = ? WHERE outcome = ?",
+            (new, old),
+        )
+        conn.execute(
+            """
+            UPDATE touchpoint_outcome_log
+            SET previous_outcome = ?
+            WHERE previous_outcome = ?
+            """,
+            (new, old),
         )
 
 
@@ -236,7 +254,7 @@ def _row_to_status(row: sqlite3.Row) -> TouchpointStatus:
     if "outcome" in keys and row["outcome"]:
         outcome = row["outcome"]
     elif bool(row["done"]):
-        outcome = TOUCHPOINT_OUTCOME_VISIT_SCHEDULED
+        outcome = TOUCHPOINT_OUTCOME_ENROLLED
     else:
         outcome = TOUCHPOINT_OUTCOME_PENDING
     return TouchpointStatus(
@@ -454,12 +472,7 @@ def set_touchpoint_outcome(
     *,
     db_path: Path | None = None,
 ) -> TouchpointStatus:
-    if outcome not in (
-        TOUCHPOINT_OUTCOME_PENDING,
-        TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
-        TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
-        TOUCHPOINT_OUTCOME_DONE,
-    ):
+    if outcome not in TOUCHPOINT_OUTCOMES:
         raise ValueError(f"Invalid touchpoint outcome: {outcome}")
 
     closed = outcome != TOUCHPOINT_OUTCOME_PENDING
@@ -511,11 +524,7 @@ def set_touchpoint_done(
     db_path: Path | None = None,
 ) -> TouchpointStatus:
     """Backward-compatible wrapper."""
-    outcome = (
-        TOUCHPOINT_OUTCOME_VISIT_SCHEDULED
-        if done
-        else TOUCHPOINT_OUTCOME_PENDING
-    )
+    outcome = TOUCHPOINT_OUTCOME_ENROLLED if done else TOUCHPOINT_OUTCOME_PENDING
     return set_touchpoint_outcome(study_id, touchpoint_key, outcome, db_path=db_path)
 
 
@@ -632,6 +641,14 @@ def get_touchpoint_statuses_for_study(
             (study_id,),
         ).fetchall()
     return {r["touchpoint_key"]: _row_to_status(r) for r in rows}
+
+
+def count_touchpoint_outcomes(*, db_path: Path | None = None) -> dict[str, int]:
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT outcome, COUNT(*) AS n FROM touchpoint_status GROUP BY outcome"
+        ).fetchall()
+    return {str(row["outcome"]): int(row["n"]) for row in rows}
 
 
 def get_closed_touchpoint_records(

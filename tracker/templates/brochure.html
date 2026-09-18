@@ -101,7 +101,7 @@
 <body>
   <nav class="nav">
     <a href="{{ url_for('index') }}">Dashboard</a>
-    <a href="{{ url_for('outcome_registry') }}">Repository</a>
+    <a href="{{ url_for('index', _anchor='closed-summary') }}">Summary</a>
     <a href="{{ url_for('brochure') }}" class="active">Brochure</a>
   </nav>
 

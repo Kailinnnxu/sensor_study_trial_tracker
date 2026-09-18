@@ -13,14 +13,15 @@ from tracker.env import load_env
 from tracker.config import (
     ANCHOR_EVENT_TYPES,
     DASHBOARD_PHASES,
+    TOUCHPOINT_ACTION_CHOICES,
+    TOUCHPOINT_ACTION_OUTCOMES,
     TOUCHPOINT_DEFINITIONS,
     TOUCHPOINT_BY_KEY,
-    TOUCHPOINT_OUTCOME_DONE,
     TOUCHPOINT_OUTCOME_LABELS,
-    TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
     TOUCHPOINT_OUTCOME_PENDING,
-    TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
     TOUCHPOINT_OUTCOMES,
+    database_is_ephemeral,
+    database_path,
     flask_secret_key,
     get_touchpoints_for_event_type,
 )
@@ -30,7 +31,7 @@ from tracker.db import (
     get_closed_touchpoint_records,
     get_or_create_touchpoint_status,
     get_review_emails,
-    get_touchpoint_outcome_log,
+    count_touchpoint_outcomes,
     get_touchpoint_statuses_for_study,
     init_db,
     set_touchpoint_outcome,
@@ -140,7 +141,6 @@ def build_dashboard_phases() -> list[dict[str, Any]]:
             ),
             "closed_count": _closed_count_for_phase(phase["anchor_event_type"]),
             "show_actions": bool(phase.get("show_actions", True)),
-            "action_mode": str(phase.get("action_mode", "outcomes")),
         }
         for phase in DASHBOARD_PHASES
     ]
@@ -149,19 +149,14 @@ def build_dashboard_phases() -> list[dict[str, Any]]:
 def _redirect_after_outcome(outcome: str) -> str:
     if outcome == TOUCHPOINT_OUTCOME_PENDING:
         return url_for("index")
-    return url_for("outcome_registry")
+    return url_for("index", _anchor="closed-summary")
 
 
 def _outcome_message(study_id: str, outcome: str) -> str:
     if outcome == TOUCHPOINT_OUTCOME_PENDING:
         return f"Returned {study_id} to the active dashboard."
-    if outcome == TOUCHPOINT_OUTCOME_VISIT_SCHEDULED:
-        return f"{study_id} moved to repository (visit scheduled)."
-    if outcome == TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED:
-        return f"{study_id} moved to repository (no longer interested)."
-    if outcome == TOUCHPOINT_OUTCOME_DONE:
-        return f"{study_id} moved to repository (done)."
-    return f"Updated {study_id}."
+    label = TOUCHPOINT_OUTCOME_LABELS.get(outcome, outcome).lower()
+    return f"{study_id} marked {label}."
 
 
 def _phase_closed_counts() -> dict[str, int]:
@@ -191,42 +186,12 @@ def _enrich_outcome_records(records: list) -> list[dict[str, Any]]:
     return enriched
 
 
-def _enrich_outcome_history(entries: list) -> list[dict[str, Any]]:
-    enriched: list[dict[str, Any]] = []
-    for entry in entries:
-        tp_def = TOUCHPOINT_BY_KEY.get(entry.touchpoint_key)
-        prev_label = (
-            TOUCHPOINT_OUTCOME_LABELS.get(entry.previous_outcome, entry.previous_outcome)
-            if entry.previous_outcome
-            else None
-        )
-        enriched.append(
-            {
-                **entry.__dict__,
-                "touchpoint_label": tp_def.label if tp_def else entry.touchpoint_key,
-                "outcome_label": TOUCHPOINT_OUTCOME_LABELS.get(
-                    entry.outcome, entry.outcome
-                ),
-                "previous_outcome_label": prev_label,
-            }
-        )
-    return enriched
-
-
 def _outcome_counts() -> dict[str, int]:
-    all_closed = get_closed_touchpoint_records()
-    return {
-        "visit_scheduled": sum(
-            1 for r in all_closed if r.outcome == TOUCHPOINT_OUTCOME_VISIT_SCHEDULED
-        ),
-        "no_longer_interested": sum(
-            1
-            for r in all_closed
-            if r.outcome == TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED
-        ),
-        "done": sum(1 for r in all_closed if r.outcome == TOUCHPOINT_OUTCOME_DONE),
-        "total": len(all_closed),
-    }
+    raw = count_touchpoint_outcomes()
+    counts = {key: raw.get(key, 0) for key in TOUCHPOINT_ACTION_OUTCOMES}
+    counts["pending"] = raw.get(TOUCHPOINT_OUTCOME_PENDING, 0)
+    counts["total"] = sum(counts[key] for key in TOUCHPOINT_ACTION_OUTCOMES)
+    return counts
 
 
 def create_app() -> Flask:
@@ -234,13 +199,22 @@ def create_app() -> Flask:
     app = Flask(__name__, template_folder="../templates", static_folder="../static")
     app.secret_key = flask_secret_key()
 
+    @app.context_processor
+    def _inject_outcome_choices() -> dict[str, Any]:
+        return {"action_outcome_choices": TOUCHPOINT_ACTION_CHOICES}
+
     @app.before_request
     def _ensure_db() -> None:
         init_db()
 
     @app.get("/health")
     def health():
-        return {"status": "ok"}
+        ephemeral = database_is_ephemeral()
+        return {
+            "status": "ok",
+            "database_path": str(database_path()),
+            "persistent": not ephemeral,
+        }
 
     @app.route("/brochure")
     def brochure():
@@ -248,12 +222,22 @@ def create_app() -> Flask:
 
     @app.route("/")
     def index():
+        filter_outcome = request.args.get("outcome", "").strip() or None
+        if filter_outcome and filter_outcome not in TOUCHPOINT_ACTION_OUTCOMES:
+            filter_outcome = None
         return render_template(
             "index.html",
             phases=build_dashboard_phases(),
             anchor_event_types=ANCHOR_EVENT_TYPES,
             touchpoint_definitions=TOUCHPOINT_DEFINITIONS,
             review_emails=get_review_emails(),
+            storage_ephemeral=database_is_ephemeral(),
+            database_path=str(database_path()),
+            closed_records=_enrich_outcome_records(
+                get_closed_touchpoint_records(outcome=filter_outcome)
+            ),
+            filter_outcome=filter_outcome,
+            counts=_outcome_counts(),
         )
 
     @app.route("/anchor", methods=["POST"])
@@ -346,29 +330,16 @@ def create_app() -> Flask:
     @app.route("/outcomes")
     def outcome_registry():
         filter_outcome = request.args.get("outcome", "").strip() or None
-        if filter_outcome and filter_outcome not in TOUCHPOINT_OUTCOMES:
+        if filter_outcome and filter_outcome not in TOUCHPOINT_ACTION_OUTCOMES:
             filter_outcome = None
-        if filter_outcome == "pending":
-            filter_outcome = None
-
-        records = _enrich_outcome_records(
-            get_closed_touchpoint_records(outcome=filter_outcome)
-        )
-        history = _enrich_outcome_history(get_touchpoint_outcome_log(limit=200))
-        return render_template(
-            "outcomes.html",
-            records=records,
-            history=history,
-            filter_outcome=filter_outcome,
-            counts=_outcome_counts(),
+        return redirect(
+            url_for("index", outcome=filter_outcome, _anchor="closed-summary")
         )
 
     @app.route("/outcomes.csv")
     def outcome_registry_csv():
         filter_outcome = request.args.get("outcome", "").strip() or None
-        if filter_outcome and filter_outcome not in TOUCHPOINT_OUTCOMES:
-            filter_outcome = None
-        if filter_outcome == "pending":
+        if filter_outcome and filter_outcome not in TOUCHPOINT_ACTION_OUTCOMES:
             filter_outcome = None
 
         records = _enrich_outcome_records(

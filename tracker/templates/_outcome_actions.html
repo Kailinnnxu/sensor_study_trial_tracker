@@ -20,7 +20,8 @@
   }
   .outcome-toast.success { background: #dafbe1; color: #1a7f37; }
   .outcome-toast.error { background: #ffebe9; color: #cf222e; }
-  button.outcome-busy {
+  button.outcome-busy,
+  select.outcome-busy {
     opacity: 0.65;
     cursor: wait;
   }
@@ -53,7 +54,7 @@
         el.style.display = "";
         el.innerHTML =
           count +
-          ' closed record(s) in the <a href="/outcomes">repository</a>.';
+          ' closed record(s) in the <a href="#closed-summary">summary</a>.';
       } else {
         el.style.display = "none";
         el.textContent = "";
@@ -64,9 +65,13 @@
   function updateRepositoryStats(counts) {
     if (!counts) return;
     var mappings = [
-      ["visit_scheduled", ".repo-stat-visit-scheduled"],
-      ["no_longer_interested", ".repo-stat-no-longer-interested"],
-      ["done", ".repo-stat-done"],
+      ["pending", ".repo-stat-pending"],
+      ["not_within_timeframe", ".repo-stat-not_within_timeframe"],
+      ["call_not_answered", ".repo-stat-call_not_answered"],
+      ["rejected", ".repo-stat-rejected"],
+      ["enrolled", ".repo-stat-enrolled"],
+      ["ongoing", ".repo-stat-ongoing"],
+      ["finished", ".repo-stat-finished"],
     ];
     mappings.forEach(function (pair) {
       var el = document.querySelector(pair[1]);
@@ -89,18 +94,26 @@
     wrap.appendChild(empty);
   }
 
+  function setFormBusy(form, busy) {
+    var button = form.querySelector('button[type="submit"]');
+    var select = form.querySelector("select.outcome-select");
+    if (button) {
+      button.classList.toggle("outcome-busy", busy);
+      button.disabled = busy;
+    }
+    if (select) {
+      select.classList.toggle("outcome-busy", busy);
+      select.disabled = busy;
+    }
+  }
+
   function handleOutcomeSubmit(event) {
     var form = event.target.closest("form.outcome-form");
     if (!form) return;
     event.preventDefault();
 
-    var button = form.querySelector('button[type="submit"]');
-    if (button && button.classList.contains("outcome-busy")) return;
-
-    if (button) {
-      button.classList.add("outcome-busy");
-      button.disabled = true;
-    }
+    if (form.querySelector(".outcome-busy")) return;
+    setFormBusy(form, true);
 
     fetch(form.action, {
       method: "POST",
@@ -129,17 +142,29 @@
         updateClosedSummary(data.phase_closed_counts);
         updateRepositoryStats(data.counts);
         showToast(data.message, "success");
+        window.location.assign(
+          data.outcome === "pending" ? "/" : "/#closed-summary"
+        );
       })
       .catch(function (err) {
         showToast(err.message || "Action failed", "error");
-      })
-      .finally(function () {
-        if (button) {
-          button.classList.remove("outcome-busy");
-          button.disabled = false;
-        }
+        setFormBusy(form, false);
       });
   }
+
+  document.addEventListener("change", function (event) {
+    var select = event.target.closest("select.outcome-select");
+    if (!select || !select.value) return;
+    var form = select.closest("form.outcome-form");
+    if (!form) return;
+    var template = select.getAttribute("data-action-template") || "";
+    form.action = template.replace("__OUTCOME__", select.value);
+    if (typeof form.requestSubmit === "function") {
+      form.requestSubmit();
+    } else {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    }
+  });
 
   document.addEventListener("submit", handleOutcomeSubmit);
 })();

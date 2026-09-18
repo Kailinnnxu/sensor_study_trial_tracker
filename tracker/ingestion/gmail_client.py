@@ -15,9 +15,11 @@ from googleapiclient.discovery import build
 
 from tracker.config import gmail_credentials_path, gmail_token_path
 from tracker.gmail_secrets import (
+    GmailAuthError,
     GmailSetupError,
     ensure_gmail_files,
     gmail_setup_diagnostics,
+    overwrite_token_from_env,
     persist_token,
 )
 
@@ -78,35 +80,113 @@ def _header(headers: list[dict], name: str) -> str:
     return ""
 
 
-def get_gmail_service():
-    ensure_gmail_files()
-    creds_path = gmail_credentials_path()
-    token_path = gmail_token_path()
-    diag = gmail_setup_diagnostics()
-    creds = None
+def _load_token(token_path) -> Credentials | None:
+    if not token_path.exists():
+        return None
+    return Credentials.from_authorized_user_file(str(token_path), SCOPES)
 
-    if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-                persist_token(creds.to_json())
-            except Exception:
-                # Dead refresh token (invalid_grant) — fall through to browser OAuth.
-                creds = None
-
-        if not creds or not creds.valid:
-            if not creds_path.exists():
-                raise GmailSetupError(diag)
-            flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
-            creds = flow.run_local_server(port=0)
-            persist_token(creds.to_json())
-    elif creds.valid:
+def _refresh_credentials(creds: Credentials) -> Credentials | None:
+    if not creds.refresh_token:
+        return None
+    try:
+        creds.refresh(Request())
         persist_token(creds.to_json())
+        return creds
+    except Exception:
+        return None
 
-    return build("gmail", "v1", credentials=creds)
+
+def _credentials_from_disk_or_env():
+    token_path = gmail_token_path()
+    creds = _load_token(token_path)
+    if creds and creds.valid:
+        persist_token(creds.to_json())
+        return creds
+    if creds and creds.expired:
+        refreshed = _refresh_credentials(creds)
+        if refreshed:
+            return refreshed
+        # Dead refresh token: a newly pasted GMAIL_TOKEN_B64 can replace it.
+        try:
+            replaced = overwrite_token_from_env()
+        except ValueError:
+            replaced = False
+        if replaced:
+            creds = _load_token(token_path)
+            if creds and creds.valid:
+                return creds
+            if creds and creds.expired:
+                refreshed = _refresh_credentials(creds)
+                if refreshed:
+                    return refreshed
+    return None
+
+
+def _browser_available() -> bool:
+    import webbrowser
+
+    try:
+        webbrowser.get()
+        return True
+    except webbrowser.Error:
+        return False
+
+
+def _register_browser_fallback() -> None:
+    import shutil
+    import sys
+    import webbrowser
+
+    # Prefer `open` on macOS. Python's default MacOSXOSAScript often fails
+    # from Cursor/agent terminals even when webbrowser.get() succeeds.
+    if sys.platform == "darwin" and shutil.which("open"):
+        webbrowser.register(
+            "macos-open",
+            None,
+            webbrowser.BackgroundBrowser("open"),
+            preferred=True,
+        )
+        return
+    if _browser_available():
+        return
+    if shutil.which("xdg-open"):
+        webbrowser.register(
+            "xdg-open",
+            None,
+            webbrowser.BackgroundBrowser("xdg-open"),
+            preferred=True,
+        )
+
+
+def _run_interactive_oauth(creds_path) -> Credentials:
+    flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
+    _register_browser_fallback()
+    open_browser = _browser_available()
+    if not open_browser:
+        print(
+            "No browser could be opened automatically. "
+            "Copy the URL printed next into Chrome or Safari.",
+            flush=True,
+        )
+    return flow.run_local_server(port=0, open_browser=open_browser)
+
+
+def get_gmail_service(*, interactive: bool = False):
+    ensure_gmail_files()
+    creds = _credentials_from_disk_or_env()
+    if creds and creds.valid:
+        return build("gmail", "v1", credentials=creds)
+
+    if interactive:
+        creds_path = gmail_credentials_path()
+        if not creds_path.exists():
+            raise GmailSetupError(gmail_setup_diagnostics())
+        creds = _run_interactive_oauth(creds_path)
+        persist_token(creds.to_json())
+        return build("gmail", "v1", credentials=creds)
+
+    raise GmailAuthError()
 
 
 def fetch_recent_messages(

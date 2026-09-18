@@ -105,6 +105,40 @@ def persist_token(creds_json: str) -> None:
     token_path.write_text(creds_json, encoding="utf-8")
 
 
+def _token_env_value() -> tuple[str, str] | None:
+    if _env_present("GMAIL_TOKEN_JSON"):
+        return "GMAIL_TOKEN_JSON", os.environ["GMAIL_TOKEN_JSON"]
+    if _env_present("GMAIL_TOKEN_B64"):
+        return "GMAIL_TOKEN_B64", os.environ["GMAIL_TOKEN_B64"]
+    return None
+
+
+def overwrite_token_from_env() -> bool:
+    """Replace the on-disk token from env vars. Used after a failed refresh."""
+    env = _token_env_value()
+    if env is None:
+        return False
+    env_name, raw = env
+    persist_token(_decode_secret(raw, env_name=env_name))
+    return True
+
+
+class GmailAuthError(RuntimeError):
+    """Saved Gmail token is missing, expired, or revoked."""
+
+    def __init__(self, detail: str = "") -> None:
+        message = (
+            "Gmail login expired or is missing, and this app cannot open a "
+            "browser to sign in again (normal on Railway or a headless server). "
+            "On your computer run: python scripts/setup_gmail_oauth.py "
+            "then python scripts/export_railway_secrets.py --out railway_gmail_vars.txt "
+            "and update GMAIL_TOKEN_B64 in Railway Variables on the web and cron services."
+        )
+        if detail:
+            message = f"{detail} {message}"
+        super().__init__(message)
+
+
 class GmailSetupError(RuntimeError):
     """Gmail OAuth files or env vars are not configured."""
 

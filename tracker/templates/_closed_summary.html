@@ -1,0 +1,63 @@
+<div class="card" id="closed-summary">
+  <h2>Summary</h2>
+  <div class="toolbar">
+    <div class="filter-tabs">
+      <a href="{{ url_for('index', _anchor='closed-summary') }}" {% if not filter_outcome %}class="active"{% endif %}>All closed</a>
+      {% for key, label in action_outcome_choices %}
+      <a href="{{ url_for('index', outcome=key, _anchor='closed-summary') }}" {% if filter_outcome == key %}class="active"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </div>
+    <a class="btn" href="{{ url_for('outcome_registry_csv', outcome=filter_outcome) }}">Download CSV</a>
+  </div>
+
+  <div class="stats">
+    <span><strong class="repo-stat-pending">{{ counts.get('pending', 0) }}</strong> pending</span>
+    {% for key, label in action_outcome_choices %}
+    <span><strong class="repo-stat-{{ key }}">{{ counts.get(key, 0) }}</strong> {{ label|lower }}</span>
+    {% endfor %}
+    <span><strong class="repo-stat-shown">{{ closed_records|length }}</strong> shown</span>
+  </div>
+
+  <div class="table-wrap repository-table" data-empty-message="No closed participants yet. Select a status in the tables below to move them here.">
+  {% if closed_records %}
+  <table class="sortable-table">
+    <thead>
+      <tr>
+        <th>Study ID</th>
+        <th>Outcome</th>
+        <th>Outcome date</th>
+        <th>Anchor event</th>
+        <th>Email received (UTC)</th>
+        <th class="no-sort">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in closed_records %}
+      <tr data-study-id="{{ r.study_id }}" data-touchpoint-key="{{ r.touchpoint_key }}">
+        <td class="study-id" data-sort-value="{{ r.study_id }}">{{ r.study_id }}</td>
+        <td data-sort-value="{{ r.outcome }}">
+          <span class="badge {{ r.outcome.replace('_', '-') }}">{{ r.outcome_label }}</span>
+        </td>
+        <td data-sort-value="{{ r.outcome_date.isoformat() if r.outcome_date else '' }}">{{ r.outcome_date or '—' }}</td>
+        <td data-sort-value="{{ r.anchor_event_date.isoformat() }}">{{ r.anchor_event_type }}<br><small>Event: {{ r.anchor_event_date }}</small></td>
+        <td data-sort-value="{% if r.email_received_at %}{{ r.email_received_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}">
+          {% if r.email_received_at %}
+          {{ r.email_received_at.strftime('%Y-%m-%d %H:%M') }}
+          {% else %}
+          <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=r.study_id, touchpoint_key=r.touchpoint_key, outcome='pending') }}">
+            <button type="submit" class="secondary">Return to active</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No closed participants yet. Select a status in the tables below to move them here.</p>
+  {% endif %}
+  </div>
+</div>

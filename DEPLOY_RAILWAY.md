@@ -135,7 +135,7 @@ You do **not** run the browser OAuth flow on Railway.
 
 | Problem | Fix |
 |---------|-----|
-| Database resets on deploy | Add and mount `/data` volume |
+| Database resets on deploy | Mount a volume at `/data` on **web and cron**, set `TRACKER_DATABASE_PATH=/data/tracker.db`. Fetch does not delete history; a missing volume does. |
 | `Gmail credentials not found` | Set `GMAIL_CREDENTIALS_B64` |
 | Token expired / auth errors | Re-run export script after local OAuth refresh |
 | Cron never runs | Confirm cron schedule on cron service, not web service |

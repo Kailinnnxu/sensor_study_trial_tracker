@@ -112,14 +112,12 @@ DASHBOARD_PHASES: tuple[dict[str, str | bool], ...] = (
         "title": "Phase 1 — Home visit scheduling",
         "anchor_event_type": "assessment_complete",
         "show_actions": True,
-        "action_mode": "outcomes",
     },
     {
         "key": "phase2",
         "title": "Phase 2 — Sensor collection",
         "anchor_event_type": "sensor_collection_start",
         "show_actions": True,
-        "action_mode": "mark_done",
     },
 )
 
@@ -132,9 +130,56 @@ def _env(key: str, default: str | None = None) -> str | None:
     return os.environ.get(key, default)
 
 
+def _writable_dir(path: Path) -> bool:
+    try:
+        return path.is_dir() and os.access(path, os.W_OK)
+    except OSError:
+        return False
+
+
+def persistent_volume_dir() -> Path | None:
+    """Writable volume mount (Railway `/data`), if present."""
+    env_mount = _env("RAILWAY_VOLUME_MOUNT_PATH")
+    candidates = [Path(env_mount)] if env_mount else []
+    candidates.append(Path("/data"))
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if _writable_dir(resolved):
+            return resolved
+    return None
+
+
+def _path_is_on_volume(path: Path, volume: Path) -> bool:
+    try:
+        path.resolve().relative_to(volume.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def database_path() -> Path:
-    raw = _env("TRACKER_DATABASE_PATH", "data/tracker.db")
-    return _resolve_project_path(raw)
+    configured = _env("TRACKER_DATABASE_PATH", "data/tracker.db")
+    path = _resolve_project_path(configured)
+    volume = persistent_volume_dir()
+    # Keep SQLite on the mounted volume so Railway deploys cannot wipe records.
+    if volume is not None and not _path_is_on_volume(path, volume):
+        return (volume / "tracker.db").resolve()
+    return path
+
+
+def database_is_ephemeral() -> bool:
+    """True when running on Railway without a usable persistent volume."""
+    on_railway = bool(_env("RAILWAY_ENVIRONMENT") or _env("RAILWAY_PROJECT_ID"))
+    if not on_railway:
+        return False
+    volume = persistent_volume_dir()
+    if volume is None:
+        return True
+    return not _path_is_on_volume(database_path(), volume)
 
 
 def gmail_credentials_path() -> Path:
@@ -178,22 +223,47 @@ def app_url() -> str:
     return _env("APP_URL", "http://localhost:5000")
 
 
-# Touchpoint closure outcomes (replaces generic "done").
+# Touchpoint action outcomes. Pending stays on the dashboard; all others
+# move to the repository and stop reminders.
 TOUCHPOINT_OUTCOME_PENDING = "pending"
-TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED = "no_longer_interested"
-TOUCHPOINT_OUTCOME_VISIT_SCHEDULED = "visit_scheduled"
-TOUCHPOINT_OUTCOME_DONE = "done"
+TOUCHPOINT_OUTCOME_NOT_WITHIN_TIMEFRAME = "not_within_timeframe"
+TOUCHPOINT_OUTCOME_CALL_NOT_ANSWERED = "call_not_answered"
+TOUCHPOINT_OUTCOME_REJECTED = "rejected"
+TOUCHPOINT_OUTCOME_ENROLLED = "enrolled"
+TOUCHPOINT_OUTCOME_ONGOING = "ongoing"
+TOUCHPOINT_OUTCOME_FINISHED = "finished"
+
+TOUCHPOINT_ACTION_OUTCOMES: tuple[str, ...] = (
+    TOUCHPOINT_OUTCOME_NOT_WITHIN_TIMEFRAME,
+    TOUCHPOINT_OUTCOME_CALL_NOT_ANSWERED,
+    TOUCHPOINT_OUTCOME_REJECTED,
+    TOUCHPOINT_OUTCOME_ENROLLED,
+    TOUCHPOINT_OUTCOME_ONGOING,
+    TOUCHPOINT_OUTCOME_FINISHED,
+)
 
 TOUCHPOINT_OUTCOMES: tuple[str, ...] = (
     TOUCHPOINT_OUTCOME_PENDING,
-    TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED,
-    TOUCHPOINT_OUTCOME_VISIT_SCHEDULED,
-    TOUCHPOINT_OUTCOME_DONE,
+    *TOUCHPOINT_ACTION_OUTCOMES,
 )
 
 TOUCHPOINT_OUTCOME_LABELS: dict[str, str] = {
     TOUCHPOINT_OUTCOME_PENDING: "Pending",
-    TOUCHPOINT_OUTCOME_NO_LONGER_INTERESTED: "No longer interested",
-    TOUCHPOINT_OUTCOME_VISIT_SCHEDULED: "Visit scheduled",
-    TOUCHPOINT_OUTCOME_DONE: "Done",
+    TOUCHPOINT_OUTCOME_NOT_WITHIN_TIMEFRAME: "Not within timeframe",
+    TOUCHPOINT_OUTCOME_CALL_NOT_ANSWERED: "Call not answered",
+    TOUCHPOINT_OUTCOME_REJECTED: "Rejected",
+    TOUCHPOINT_OUTCOME_ENROLLED: "Enrolled",
+    TOUCHPOINT_OUTCOME_ONGOING: "Ongoing",
+    TOUCHPOINT_OUTCOME_FINISHED: "Finished",
+}
+
+TOUCHPOINT_ACTION_CHOICES: tuple[tuple[str, str], ...] = tuple(
+    (key, TOUCHPOINT_OUTCOME_LABELS[key]) for key in TOUCHPOINT_ACTION_OUTCOMES
+)
+
+# Legacy values rewritten on startup.
+LEGACY_OUTCOME_MAP: dict[str, str] = {
+    "visit_scheduled": TOUCHPOINT_OUTCOME_ENROLLED,
+    "no_longer_interested": TOUCHPOINT_OUTCOME_REJECTED,
+    "done": TOUCHPOINT_OUTCOME_FINISHED,
 }

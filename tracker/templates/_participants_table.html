@@ -4,12 +4,8 @@
   <thead>
     <tr>
       <th>Study ID</th>
-      <th>Touchpoint</th>
       <th>Anchor event</th>
       <th>Email received (UTC)</th>
-      <th>Status</th>
-      <th>Offsets sent</th>
-      <th>Next due</th>
       {% if show_actions %}
       <th class="no-sort">Actions</th>
       {% endif %}
@@ -20,9 +16,6 @@
       {% for tp in row.touchpoints %}
       <tr data-study-id="{{ row.study_id }}" data-touchpoint-key="{{ tp.key }}">
         <td class="study-id" data-sort-value="{{ row.study_id }}">{{ row.study_id }}</td>
-        <td data-sort-value="{{ tp.label }}">
-          {{ tp.label }}<br><small class="muted">{{ tp.key }}</small>
-        </td>
         <td data-sort-value="{{ tp.anchor_date.isoformat() }}">
           {{ tp.anchor_type }}<br><small>Event: {{ tp.anchor_date }}</small>
         </td>
@@ -33,61 +26,21 @@
           <span class="muted">—</span>
           {% endif %}
         </td>
-        <td data-sort-value="{{ tp.outcome }}">
-          {% if tp.outcome == 'pending' %}
-          <span class="badge pending">Pending</span>
-          {% elif tp.outcome == 'done' %}
-          <span class="badge done">Done{% if tp.done_date %} ({{ tp.done_date }}){% endif %}</span>
-          {% elif tp.outcome == 'visit_scheduled' %}
-          <span class="badge visit-scheduled">Visit scheduled{% if tp.done_date %} ({{ tp.done_date }}){% endif %}</span>
-          {% elif tp.outcome == 'no_longer_interested' %}
-          <span class="badge no-longer-interested">No longer interested{% if tp.done_date %} ({{ tp.done_date }}){% endif %}</span>
-          {% else %}
-          <span class="badge">{{ tp.outcome_label }}</span>
-          {% endif %}
-        </td>
-        <td class="offsets" data-sort-value="{{ tp.offsets_sent | join(',') }}">{{ tp.offsets_sent or '[]' }}</td>
-        <td data-sort-value="{% if tp.outcome != 'pending' %}closed{% elif tp.due_info.all_sent %}sent{% elif tp.due_info.overdue %}{{ tp.due_info.overdue | min }}{% elif tp.due_info.next_future is not none %}{{ tp.due_info.next_future }}{% endif %}">
-          {% if tp.outcome != 'pending' %}
-          —
-          {% elif tp.due_info.all_sent %}
-          all due sent
-          {% elif tp.due_info.overdue %}
-          reminders pending (days {{ tp.due_info.overdue | join(', ') }})
-          {% elif tp.due_info.next_future is not none %}
-          day {{ tp.due_info.next_future }}
-          {% else %}
-          —
-          {% endif %}
-        </td>
         {% if show_actions %}
         <td class="actions-cell">
-          <div class="actions-inner{% if action_mode == 'mark_done' %} actions-inner-compact{% endif %}">
-            {% if action_mode == 'mark_done' %}
-              {% if tp.outcome == 'pending' %}
-              <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='done') }}">
-                <button type="submit">Mark done</button>
-              </form>
-              {% else %}
-              <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='pending') }}">
-                <button type="submit" class="secondary">Undo</button>
-              </form>
-              {% endif %}
-            {% else %}
-              {% if tp.outcome == 'pending' %}
-              <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='no_longer_interested') }}">
-                <button type="submit" class="danger">No longer interested</button>
-              </form>
-              <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='visit_scheduled') }}">
-                <button type="submit">Visit scheduled</button>
-              </form>
-              {% else %}
-              <form class="inline outcome-form" method="post" action="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='pending') }}">
-                <button type="submit" class="secondary">Reset to pending</button>
-              </form>
-              {% endif %}
-            {% endif %}
-          </div>
+          <form class="inline outcome-form" method="post">
+            <select
+              class="outcome-select"
+              name="outcome"
+              aria-label="Set status for {{ row.study_id }}"
+              data-action-template="{{ url_for('set_outcome', study_id=row.study_id, touchpoint_key=tp.key, outcome='__OUTCOME__') }}"
+            >
+              <option value="" selected disabled>Select status</option>
+              {% for key, label in action_outcome_choices %}
+              <option value="{{ key }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </form>
         </td>
         {% endif %}
       </tr>
@@ -96,6 +49,6 @@
   </tbody>
 </table>
 {% else %}
-<p class="empty">No active participants in this phase. Closed records are in the <a href="{{ url_for('outcome_registry') }}">repository</a>.</p>
+<p class="empty">No active participants in this phase. Closed records are in the <a href="#closed-summary">summary</a>.</p>
 {% endif %}
 </div>

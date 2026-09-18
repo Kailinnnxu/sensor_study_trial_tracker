@@ -56,11 +56,49 @@
       font-weight: 600;
     }
     .badge.done { background: #dafbe1; color: var(--done); }
-    .badge.done { background: #dafbe1; color: var(--done); }
     .badge.visit-scheduled { background: #dafbe1; color: var(--done); }
     .badge.no-longer-interested { background: #ffebe9; color: var(--review); }
+    .badge.enrolled,
+    .badge.ongoing,
+    .badge.finished { background: #dafbe1; color: var(--done); }
+    .badge.rejected,
+    .badge.not-within-timeframe { background: #ffebe9; color: var(--review); }
+    .badge.call-not-answered { background: #fff8c5; color: var(--pending); }
     .badge.pending { background: #fff8c5; color: var(--pending); }
     .badge.review { background: #ffebe9; color: var(--review); }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .toolbar a.btn {
+      background: var(--accent);
+      color: #fff;
+      border-radius: 6px;
+      padding: 0.45rem 0.85rem;
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .filter-tabs a {
+      color: var(--muted);
+      text-decoration: none;
+      margin-right: 1rem;
+      font-weight: 600;
+    }
+    .filter-tabs a.active {
+      color: var(--accent);
+    }
+    .stats {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.75rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .stats strong { color: var(--text); }
     form.inline { display: inline; }
     button, .btn {
       background: var(--accent);
@@ -97,6 +135,11 @@
       border: 1px solid var(--border);
       border-radius: 6px;
       font-size: 0.95rem;
+    }
+    select.outcome-select {
+      width: auto;
+      min-width: 13.5rem;
+      max-width: 100%;
     }
     .empty {
       color: var(--muted);
@@ -142,11 +185,20 @@
 <body>
   <nav class="nav" style="margin-bottom: 1.5rem;">
     <a href="{{ url_for('index') }}" style="color: var(--accent); text-decoration: none; font-weight: 600; margin-right: 1rem;">Dashboard</a>
-    <a href="{{ url_for('outcome_registry') }}" style="color: var(--accent); text-decoration: none; font-weight: 600; margin-right: 1rem;">Repository</a>
+    <a href="{{ url_for('index', _anchor='closed-summary') }}" style="color: var(--accent); text-decoration: none; font-weight: 600; margin-right: 1rem;">Summary</a>
     <a href="{{ url_for('brochure') }}" style="color: var(--accent); text-decoration: none; font-weight: 600;">Brochure</a>
   </nav>
   <h1>Participant Touchpoint Tracker</h1>
   <p class="muted">Study ID only — no PHI stored in this system.</p>
+
+  {% if storage_ephemeral %}
+  <div class="flash error">
+    Records are stored on an ephemeral disk and will be wiped on the next deploy.
+    In Railway: add a volume mounted at <code>/data</code> on the web and cron
+    services, set <code>TRACKER_DATABASE_PATH=/data/tracker.db</code>, then redeploy.
+    Current database: <code>{{ database_path }}</code>
+  </div>
+  {% endif %}
 
   {% with messages = get_flashed_messages(with_categories=true) %}
   {% if messages %}
@@ -155,6 +207,8 @@
   {% endfor %}
   {% endif %}
   {% endwith %}
+
+  {% include '_closed_summary.html' %}
 
   <div class="card">
     <h2>Fetch HAI emails</h2>
@@ -222,9 +276,9 @@
     <h2>{{ phase.title }}</h2>
     <p class="muted phase-closed-summary" data-phase-closed-summary="{{ phase.key }}" style="margin-top: 0;{% if not phase.closed_count %} display: none;{% endif %}">
       {% if phase.closed_count %}{{ phase.closed_count }} closed record(s) in the
-      <a href="{{ url_for('outcome_registry') }}">repository</a>.{% endif %}
+      <a href="#closed-summary">summary</a>.{% endif %}
     </p>
-    {% with rows=phase.rows, show_actions=phase.show_actions, action_mode=phase.action_mode %}
+    {% with rows=phase.rows, show_actions=phase.show_actions %}
     {% include '_participants_table.html' %}
     {% endwith %}
   </div>
