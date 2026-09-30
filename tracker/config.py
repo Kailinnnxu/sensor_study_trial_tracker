@@ -111,12 +111,14 @@ DASHBOARD_PHASES: tuple[dict[str, str | bool], ...] = (
         "key": "phase1",
         "title": "Phase 1 — Home visit scheduling",
         "anchor_event_type": "assessment_complete",
+        "date_column_label": "Assessment complete date",
         "show_actions": True,
     },
     {
         "key": "phase2",
         "title": "Phase 2 — Sensor collection",
         "anchor_event_type": "sensor_collection_start",
+        "date_column_label": "Sensor collection date",
         "show_actions": True,
     },
 )

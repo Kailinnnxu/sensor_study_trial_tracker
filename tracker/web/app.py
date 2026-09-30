@@ -141,6 +141,9 @@ def build_dashboard_phases() -> list[dict[str, Any]]:
                 pending_only=True,
             ),
             "closed_count": _closed_count_for_phase(phase["anchor_event_type"]),
+            "date_column_label": phase.get(
+                "date_column_label", "Assessment complete date"
+            ),
             "show_actions": bool(phase.get("show_actions", True)),
         }
         for phase in DASHBOARD_PHASES

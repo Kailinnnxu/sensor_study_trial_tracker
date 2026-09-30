@@ -708,6 +708,10 @@ class TestWebDashboard:
         assert "data-sort-value" in html
         assert "Click to sort" in html
         assert "function initAllTables" in html
+        assert "Assessment complete date" in html
+        assert "2026-06-01" in html
+        assert "Event:" not in html
+        assert ">assessment_complete<br>" not in html
 
     def test_brochure_page_embeds_pdf(self, db_path):
         from tracker.web.app import create_app

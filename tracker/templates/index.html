@@ -102,7 +102,7 @@
       {% if phase.closed_count %}{{ phase.closed_count }} closed record(s) in the
       <a href="{{ url_for('summary') }}">summary</a>.{% endif %}
     </p>
-    {% with rows=phase.rows, show_actions=phase.show_actions %}
+    {% with rows=phase.rows, show_actions=phase.show_actions, date_column_label=phase.date_column_label %}
     {% include '_participants_table.html' %}
     {% endwith %}
   </div>

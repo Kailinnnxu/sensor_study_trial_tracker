@@ -4,7 +4,7 @@
   <thead>
     <tr>
       <th>Study ID</th>
-      <th>Anchor event</th>
+      <th>{{ date_column_label|default('Assessment complete date') }}</th>
       <th>Email received (UTC)</th>
       {% if show_actions %}
       <th class="no-sort">Actions</th>
@@ -16,9 +16,7 @@
       {% for tp in row.touchpoints %}
       <tr data-study-id="{{ row.study_id }}" data-touchpoint-key="{{ tp.key }}">
         <td class="study-id" data-sort-value="{{ row.study_id }}">{{ row.study_id }}</td>
-        <td data-sort-value="{{ tp.anchor_date.isoformat() }}">
-          {{ tp.anchor_type }}<br><small>Event: {{ tp.anchor_date }}</small>
-        </td>
+        <td data-sort-value="{{ tp.anchor_date.isoformat() }}">{{ tp.anchor_date }}</td>
         <td data-sort-value="{% if tp.email_received_at %}{{ tp.email_received_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}">
           {% if tp.email_received_at %}
           {{ tp.email_received_at.strftime('%Y-%m-%d %H:%M') }}

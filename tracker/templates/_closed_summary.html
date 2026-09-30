@@ -26,7 +26,7 @@
         <th>Study ID</th>
         <th>Outcome</th>
         <th>Outcome date</th>
-        <th>Anchor event</th>
+        <th>Assessment complete date</th>
         <th>Email received (UTC)</th>
         <th class="no-sort">Actions</th>
       </tr>
@@ -39,7 +39,7 @@
           <span class="badge {{ r.outcome.replace('_', '-') }}">{{ r.outcome_label }}</span>
         </td>
         <td data-sort-value="{{ r.outcome_date.isoformat() if r.outcome_date else '' }}">{{ r.outcome_date or '—' }}</td>
-        <td data-sort-value="{{ r.anchor_event_date.isoformat() }}">{{ r.anchor_event_type }}<br><small>Event: {{ r.anchor_event_date }}</small></td>
+        <td data-sort-value="{{ r.anchor_event_date.isoformat() }}">{{ r.anchor_event_date }}</td>
         <td data-sort-value="{% if r.email_received_at %}{{ r.email_received_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}">
           {% if r.email_received_at %}
           {{ r.email_received_at.strftime('%Y-%m-%d %H:%M') }}
