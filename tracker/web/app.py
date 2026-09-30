@@ -147,10 +147,25 @@ def build_dashboard_phases() -> list[dict[str, Any]]:
     ]
 
 
+def _requested_outcome_filter() -> str | None:
+    filter_outcome = request.args.get("outcome", "").strip() or None
+    if filter_outcome and filter_outcome not in TOUCHPOINT_ACTION_OUTCOMES:
+        return None
+    return filter_outcome
+
+
+def _storage_page_kwargs() -> dict[str, Any]:
+    return {
+        "storage_ephemeral": database_is_ephemeral(),
+        "database_path": str(database_path()),
+        "participant_count": len(get_all_study_ids()),
+    }
+
+
 def _redirect_after_outcome(outcome: str) -> str:
     if outcome == TOUCHPOINT_OUTCOME_PENDING:
         return url_for("index")
-    return url_for("index", _anchor="closed-summary")
+    return url_for("summary")
 
 
 def _outcome_message(study_id: str, outcome: str) -> str:
@@ -226,23 +241,15 @@ def create_app() -> Flask:
 
     @app.route("/")
     def index():
-        filter_outcome = request.args.get("outcome", "").strip() or None
-        if filter_outcome and filter_outcome not in TOUCHPOINT_ACTION_OUTCOMES:
-            filter_outcome = None
         return render_template(
             "index.html",
             phases=build_dashboard_phases(),
             anchor_event_types=ANCHOR_EVENT_TYPES,
             touchpoint_definitions=TOUCHPOINT_DEFINITIONS,
             review_emails=get_review_emails(),
-            storage_ephemeral=database_is_ephemeral(),
-            database_path=str(database_path()),
-            participant_count=len(get_all_study_ids()),
-            closed_records=_enrich_outcome_records(
-                get_closed_touchpoint_records(outcome=filter_outcome)
-            ),
-            filter_outcome=filter_outcome,
             counts=_outcome_counts(),
+            active_nav="dashboard",
+            **_storage_page_kwargs(),
         )
 
     @app.route("/anchor", methods=["POST"])
@@ -341,20 +348,30 @@ def create_app() -> Flask:
         flash(message, "success")
         return redirect(_redirect_after_outcome(outcome))
 
+    @app.route("/summary")
+    def summary():
+        filter_outcome = _requested_outcome_filter()
+        return render_template(
+            "summary.html",
+            closed_records=_enrich_outcome_records(
+                get_closed_touchpoint_records(outcome=filter_outcome)
+            ),
+            filter_outcome=filter_outcome,
+            counts=_outcome_counts(),
+            active_nav="summary",
+            **_storage_page_kwargs(),
+        )
+
     @app.route("/outcomes")
     def outcome_registry():
-        filter_outcome = request.args.get("outcome", "").strip() or None
-        if filter_outcome and filter_outcome not in TOUCHPOINT_ACTION_OUTCOMES:
-            filter_outcome = None
-        return redirect(
-            url_for("index", outcome=filter_outcome, _anchor="closed-summary")
-        )
+        filter_outcome = _requested_outcome_filter()
+        if filter_outcome:
+            return redirect(url_for("summary", outcome=filter_outcome))
+        return redirect(url_for("summary"))
 
     @app.route("/outcomes.csv")
     def outcome_registry_csv():
-        filter_outcome = request.args.get("outcome", "").strip() or None
-        if filter_outcome and filter_outcome not in TOUCHPOINT_ACTION_OUTCOMES:
-            filter_outcome = None
+        filter_outcome = _requested_outcome_filter()
 
         records = _enrich_outcome_records(
             get_closed_touchpoint_records(outcome=filter_outcome)

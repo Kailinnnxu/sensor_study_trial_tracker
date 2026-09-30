@@ -1,24 +1,24 @@
 <div class="card" id="closed-summary">
-  <h2>Summary</h2>
+  <h2>Closed participants</h2>
   <div class="toolbar">
     <div class="filter-tabs">
-      <a href="{{ url_for('index', _anchor='closed-summary') }}" {% if not filter_outcome %}class="active"{% endif %}>All closed</a>
+      <a href="{{ url_for('summary') }}" {% if not filter_outcome %}class="active"{% endif %}>All closed</a>
       {% for key, label in action_outcome_choices %}
-      <a href="{{ url_for('index', outcome=key, _anchor='closed-summary') }}" {% if filter_outcome == key %}class="active"{% endif %}>{{ label }}</a>
+      <a href="{{ url_for('summary', outcome=key) }}" {% if filter_outcome == key %}class="active"{% endif %}>{{ label }}</a>
       {% endfor %}
     </div>
     <a class="btn" href="{{ url_for('outcome_registry_csv', outcome=filter_outcome) }}">Download CSV</a>
   </div>
 
   <div class="stats">
-    <span><strong class="repo-stat-pending">{{ counts.get('pending', 0) }}</strong> pending</span>
+    <span><strong class="repo-stat-pending">{{ counts.get('pending', 0) }}</strong> not assigned</span>
     {% for key, label in action_outcome_choices %}
     <span><strong class="repo-stat-{{ key }}">{{ counts.get(key, 0) }}</strong> {{ label|lower }}</span>
     {% endfor %}
     <span><strong class="repo-stat-shown">{{ closed_records|length }}</strong> shown</span>
   </div>
 
-  <div class="table-wrap repository-table" data-empty-message="No closed participants yet. Select a status in the tables below to move them here.">
+  <div class="table-wrap repository-table" data-empty-message="No closed participants yet. Select a status on the dashboard to move them here.">
   {% if closed_records %}
   <table class="sortable-table">
     <thead>
@@ -57,7 +57,7 @@
     </tbody>
   </table>
   {% else %}
-  <p class="empty">No closed participants yet. Select a status in the tables below to move them here.</p>
+  <p class="empty">No closed participants yet. Select a status on the <a href="{{ url_for('index') }}">dashboard</a> to move them here.</p>
   {% endif %}
   </div>
 </div>

@@ -503,13 +503,21 @@ class TestOutcomeRegistry:
         client = app.test_client()
         redirect_resp = client.get("/outcomes")
         assert redirect_resp.status_code == 302
-        assert "#closed-summary" in redirect_resp.headers["Location"]
+        assert redirect_resp.headers["Location"].endswith("/summary")
 
-        resp = client.get("/")
+        resp = client.get("/summary")
         assert resp.status_code == 200
         assert b"R3" in resp.data
         assert b"Enrolled" in resp.data
         assert b'id="closed-summary"' in resp.data
+        assert b"All closed" in resp.data
+
+        home = client.get("/")
+        assert home.status_code == 200
+        assert b'id="status-counts"' in home.data
+        assert b"All closed" not in home.data
+        assert b'id="closed-summary"' not in home.data
+        assert b"R3" not in home.data
 
     def test_outcome_registry_csv(self, db_path):
         from tracker.web.app import create_app
@@ -539,11 +547,16 @@ class TestOutcomeRegistry:
         client = app.test_client()
         resp = client.get("/")
         assert resp.status_code == 200
-        assert b"R5" in resp.data
-        assert b"Enrolled" in resp.data
         html = resp.get_data(as_text=True)
-        summary = html.split('id="closed-summary"', 1)[1]
-        assert "R5" in summary
+        assert "R5" not in html
+        assert 'id="closed-summary"' not in html
+        assert 'id="status-counts"' in html
+
+        summary = client.get("/summary")
+        assert summary.status_code == 200
+        assert b"R5" in summary.data
+        assert b"Enrolled" in summary.data
+        assert b'id="closed-summary"' in summary.data
 
     def test_set_outcome_redirects_to_repository(self, db_path):
         from tracker.web.app import create_app
@@ -556,7 +569,7 @@ class TestOutcomeRegistry:
             follow_redirects=False,
         )
         assert resp.status_code == 302
-        assert "#closed-summary" in resp.headers["Location"]
+        assert resp.headers["Location"].endswith("/summary")
 
     def test_reset_outcome_returns_to_dashboard(self, db_path):
         from tracker.web.app import create_app

@@ -1,0 +1,16 @@
+<div class="card" id="status-counts">
+  <h2>Status counts</h2>
+  <div class="stats">
+    <span><strong class="repo-stat-pending">{{ counts.get('pending', 0) }}</strong> not assigned</span>
+    {% for key, label in action_outcome_choices %}
+    <span>
+      <a href="{{ url_for('summary', outcome=key) }}">
+        <strong class="repo-stat-{{ key }}">{{ counts.get(key, 0) }}</strong> {{ label|lower }}
+      </a>
+    </span>
+    {% endfor %}
+  </div>
+  <p class="muted" style="margin-bottom: 0;">
+    Closed records are on the <a href="{{ url_for('summary') }}">Summary</a> page.
+  </p>
+</div>

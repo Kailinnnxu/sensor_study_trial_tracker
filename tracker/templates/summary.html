@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Summary — Participant Touchpoint Tracker</title>
+  {% include '_dashboard_styles.html' %}
+</head>
+<body>
+  {% include '_nav.html' %}
+  <h1>Summary</h1>
+  <p class="muted">Closed participants by status. Unassigned people stay on the dashboard.</p>
+
+  {% if storage_ephemeral %}
+  <div class="flash error">
+    <strong>Records disappear when this app restarts or redeploys.</strong>
+    Railway’s disk is temporary until a volume is attached.
+    Open the <strong>web</strong> service → <strong>Volumes</strong> →
+    <strong>Add Volume</strong> with mount path <code>/data</code>.
+    Set <code>TRACKER_DATABASE_PATH=/data/tracker.db</code> on web and cron,
+    then redeploy.
+    Current database: <code>{{ database_path }}</code>
+    ({{ participant_count }} participant{% if participant_count != 1 %}s{% endif %} stored now).
+  </div>
+  {% endif %}
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+  {% for category, message in messages %}
+  <div class="flash {{ category }}">{{ message }}</div>
+  {% endfor %}
+  {% endif %}
+  {% endwith %}
+
+  {% include '_closed_summary.html' %}
+  {% include '_table_sort_assets.html' %}
+  {% include '_outcome_actions.html' %}
+</body>
+</html>

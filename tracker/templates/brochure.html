@@ -99,11 +99,8 @@
   </style>
 </head>
 <body>
-  <nav class="nav">
-    <a href="{{ url_for('index') }}">Dashboard</a>
-    <a href="{{ url_for('index', _anchor='closed-summary') }}">Summary</a>
-    <a href="{{ url_for('brochure') }}" class="active">Brochure</a>
-  </nav>
+  {% set active_nav = 'brochure' %}
+  {% include '_nav.html' %}
 
   <h1>Actipal one-pager</h1>
   <p class="muted">Study brochure for participants and collaborators.</p>

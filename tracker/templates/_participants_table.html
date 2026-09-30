@@ -1,4 +1,4 @@
-<div class="table-wrap participants-table-wrap" data-empty-message="No active participants in this phase. Closed records are in the repository.">
+<div class="table-wrap participants-table-wrap" data-empty-message="No unassigned participants in this phase. Closed records are on the Summary page.">
 {% if rows %}
 <table class="sortable-table participants-table">
   <thead>
@@ -49,6 +49,6 @@
   </tbody>
 </table>
 {% else %}
-<p class="empty">No active participants in this phase. Closed records are in the <a href="#closed-summary">summary</a>.</p>
+<p class="empty">No unassigned participants in this phase. Closed records are on the <a href="{{ url_for('summary') }}">Summary</a> page.</p>
 {% endif %}
 </div>

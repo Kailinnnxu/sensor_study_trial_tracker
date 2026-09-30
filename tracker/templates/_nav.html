@@ -1,0 +1,5 @@
+<nav class="nav">
+  <a href="{{ url_for('index') }}" {% if active_nav == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
+  <a href="{{ url_for('summary') }}" {% if active_nav == 'summary' %}class="active"{% endif %}>Summary</a>
+  <a href="{{ url_for('brochure') }}" {% if active_nav == 'brochure' %}class="active"{% endif %}>Brochure</a>
+</nav>
