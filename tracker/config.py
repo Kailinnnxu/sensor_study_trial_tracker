@@ -138,18 +138,18 @@ def _writable_dir(path: Path) -> bool:
 
 
 def persistent_volume_dir() -> Path | None:
-    """Writable volume mount (Railway `/data`), if present."""
+    """Railway volume mount, if this service actually has a volume attached."""
     env_mount = _env("RAILWAY_VOLUME_MOUNT_PATH")
-    candidates = [Path(env_mount)] if env_mount else []
-    candidates.append(Path("/data"))
-    seen: set[Path] = set()
-    for path in candidates:
-        resolved = path
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if _writable_dir(resolved):
-            return resolved
+    if env_mount:
+        path = Path(env_mount)
+        if _writable_dir(path):
+            return path
+        return None
+    # Railway sets these only when a volume is attached.
+    if _env("RAILWAY_VOLUME_ID") or _env("RAILWAY_VOLUME_NAME"):
+        path = Path("/data")
+        if _writable_dir(path):
+            return path
     return None
 
 
@@ -161,14 +161,17 @@ def _path_is_on_volume(path: Path, volume: Path) -> bool:
         return False
 
 
-def database_path() -> Path:
-    configured = _env("TRACKER_DATABASE_PATH", "data/tracker.db")
+def _path_on_volume(configured: str, filename: str) -> Path:
     path = _resolve_project_path(configured)
     volume = persistent_volume_dir()
-    # Keep SQLite on the mounted volume so Railway deploys cannot wipe records.
     if volume is not None and not _path_is_on_volume(path, volume):
-        return (volume / "tracker.db").resolve()
+        return (volume / filename).resolve()
     return path
+
+
+def database_path() -> Path:
+    configured = _env("TRACKER_DATABASE_PATH", "data/tracker.db")
+    return _path_on_volume(configured, "tracker.db")
 
 
 def database_is_ephemeral() -> bool:
@@ -183,13 +186,17 @@ def database_is_ephemeral() -> bool:
 
 
 def gmail_credentials_path() -> Path:
-    return _resolve_project_path(
-        _env("GMAIL_CREDENTIALS_PATH", "credentials/gmail_credentials.json")
+    return _path_on_volume(
+        _env("GMAIL_CREDENTIALS_PATH") or "credentials/gmail_credentials.json",
+        "gmail_credentials.json",
     )
 
 
 def gmail_token_path() -> Path:
-    return _resolve_project_path(_env("GMAIL_TOKEN_PATH", "credentials/gmail_token.json"))
+    return _path_on_volume(
+        _env("GMAIL_TOKEN_PATH") or "credentials/gmail_token.json",
+        "gmail_token.json",
+    )
 
 
 def kailin_email() -> str:

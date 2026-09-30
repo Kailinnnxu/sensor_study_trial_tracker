@@ -28,6 +28,21 @@ from tracker.ingestion.run import _match_source, process_email
 from tracker.ingestion.gmail_client import EmailMessage
 
 
+def _stub_gmail_fetch(*emails: EmailMessage):
+    by_id = {email.message_id: email for email in emails}
+
+    def fetch(ids):
+        return [by_id[message_id] for message_id in ids if message_id in by_id]
+
+    return mock.patch.multiple(
+        "tracker.ingestion.run",
+        list_recent_message_ids=mock.Mock(
+            return_value=[email.message_id for email in emails]
+        ),
+        fetch_messages_by_ids=mock.Mock(side_effect=fetch),
+    )
+
+
 class TestConfig:
     def test_database_path_stable_across_cwd(self, monkeypatch, tmp_path):
         import os
@@ -43,6 +58,28 @@ class TestConfig:
             assert database_path() == db_file.resolve()
         finally:
             os.chdir(original_cwd)
+
+    def test_railway_volume_holds_database(self, monkeypatch, tmp_path):
+        from tracker.config import database_is_ephemeral, database_path
+
+        volume = tmp_path / "vol"
+        volume.mkdir()
+        monkeypatch.setenv("RAILWAY_ENVIRONMENT", "production")
+        monkeypatch.setenv("RAILWAY_VOLUME_MOUNT_PATH", str(volume))
+        monkeypatch.setenv("TRACKER_DATABASE_PATH", "data/tracker.db")
+
+        assert database_path() == (volume / "tracker.db").resolve()
+        assert database_is_ephemeral() is False
+
+    def test_railway_without_volume_is_ephemeral(self, monkeypatch):
+        from tracker.config import database_is_ephemeral
+
+        monkeypatch.setenv("RAILWAY_ENVIRONMENT", "production")
+        monkeypatch.delenv("RAILWAY_VOLUME_MOUNT_PATH", raising=False)
+        monkeypatch.delenv("RAILWAY_VOLUME_ID", raising=False)
+        monkeypatch.delenv("RAILWAY_VOLUME_NAME", raising=False)
+
+        assert database_is_ephemeral() is True
 
     def test_anchor_event_persists_after_reopen(self, db_path):
         from tracker.db import get_anchor_events, upsert_anchor_event
@@ -131,6 +168,14 @@ class TestIngestionRouting:
         assert _match_source(e1).event_type == "assessment_complete"
         assert _match_source(e2).event_type == "sensor_collection_start"
 
+    def test_gmail_backfill_query_includes_since_date(self):
+        from tracker.ingestion.run import _gmail_search_query
+
+        query = _gmail_search_query(since=date(2026, 1, 1))
+        assert query.startswith("after:2025/12/31 ")
+        assert "from:hai@hsl.harvard.edu" in query
+        assert "from:kailinxu@hsl.harvard.edu" in query
+
     def test_idempotent_ingestion(self, db_path):
         received = datetime(2026, 6, 29, 14, 30, tzinfo=timezone.utc)
         email = EmailMessage(
@@ -165,12 +210,12 @@ class TestIngestionRouting:
                 ("BF100",),
             )
 
-        with mock.patch("tracker.ingestion.run.fetch_recent_messages", return_value=[email]):
+        with _stub_gmail_fetch(email):
             stats = run_ingestion()
 
-        assert stats.received_dates_backfilled == 1
-        anchor = get_anchor_events(study_id="BF100")[0]
-        assert anchor.email_received_at == received
+        assert stats.skipped_already_processed == 1
+        assert stats.received_dates_backfilled == 0
+        assert stats.ingested == 0
 
     def test_unparseable_flagged_not_dropped(self, db_path):
         email = EmailMessage(
@@ -198,7 +243,7 @@ class TestIngestionRouting:
             body="ID: CCB300_G\nDate: 06-25-2026",
         )
 
-        with mock.patch("tracker.ingestion.run.fetch_recent_messages", return_value=[older, newer]):
+        with _stub_gmail_fetch(older, newer):
             from tracker.ingestion.run import run_ingestion
 
             stats = run_ingestion()
@@ -230,7 +275,6 @@ class TestIngestionRouting:
         assert anchor.event_date == date(2026, 6, 25)
 
     def test_reconcile_latest_assessment_from_processed_emails(self, db_path):
-        from tracker.db import mark_email_processed
         from tracker.ingestion.run import run_ingestion
 
         older = EmailMessage(
@@ -248,17 +292,14 @@ class TestIngestionRouting:
             received_at=datetime(2026, 6, 26, tzinfo=timezone.utc),
         )
         process_email(older, dry_run=False)
-        mark_email_processed("recon-new", "success", "assessment_complete:CCB302_G")
 
-        with mock.patch(
-            "tracker.ingestion.run.fetch_recent_messages",
-            return_value=[older, newer],
-        ):
+        with _stub_gmail_fetch(older, newer):
             stats = run_ingestion()
 
         anchor = get_anchor_events(study_id="CCB302_G")[0]
         assert anchor.event_date == date(2026, 6, 25)
-        assert stats.event_dates_updated == 1
+        assert stats.ingested == 1
+        assert stats.skipped_already_processed == 1
 
     def test_backfill_ignores_mismatched_assessment_date(self, db_path):
         from tracker.ingestion.run import run_ingestion
@@ -286,17 +327,14 @@ class TestIngestionRouting:
             )
         process_email(other_email, dry_run=False)
 
-        with mock.patch(
-            "tracker.ingestion.run.fetch_recent_messages",
-            return_value=[anchor_email, other_email],
-        ):
+        with _stub_gmail_fetch(anchor_email, other_email):
             stats = run_ingestion()
 
-        assert stats.received_dates_backfilled == 1
+        assert stats.skipped_already_processed == 2
+        assert stats.received_dates_backfilled == 0
         assert stats.event_dates_updated == 0
         anchor = get_anchor_events(study_id="BF200")[0]
         assert anchor.event_date == date(2026, 6, 22)
-        assert anchor.email_received_at == datetime(2026, 6, 29, 18, 38, 18, tzinfo=timezone.utc)
 
 
 class TestReminderEngine:
@@ -603,6 +641,25 @@ class TestWebDashboard:
         assert resp.status_code == 200
         assert b"2 new participant" in resp.data
         run.assert_called_once()
+
+    def test_ingest_warns_when_railway_disk_is_temporary(self, db_path, monkeypatch):
+        from tracker.ingestion.run import IngestionStats
+        from tracker.web.app import create_app
+
+        monkeypatch.setenv("RAILWAY_ENVIRONMENT", "production")
+        monkeypatch.delenv("RAILWAY_VOLUME_MOUNT_PATH", raising=False)
+        monkeypatch.delenv("RAILWAY_VOLUME_ID", raising=False)
+        monkeypatch.delenv("RAILWAY_VOLUME_NAME", raising=False)
+
+        app = create_app()
+        with mock.patch("tracker.web.app.run_ingestion") as run:
+            run.return_value = IngestionStats(ingested=1, processed=1)
+            client = app.test_client()
+            resp = client.post("/ingest", follow_redirects=True)
+
+        assert resp.status_code == 200
+        assert b"temporary disk" in resp.data
+        assert b"Add Volume" in resp.data
 
     def test_manual_ingest_expired_gmail_auth(self, db_path):
         from tracker.gmail_secrets import GmailAuthError

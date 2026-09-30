@@ -24,6 +24,7 @@ from tracker.config import (
     database_path,
     flask_secret_key,
     get_touchpoints_for_event_type,
+    persistent_volume_dir,
 )
 from tracker.db import (
     get_all_study_ids,
@@ -210,10 +211,13 @@ def create_app() -> Flask:
     @app.get("/health")
     def health():
         ephemeral = database_is_ephemeral()
+        volume = persistent_volume_dir()
         return {
             "status": "ok",
             "database_path": str(database_path()),
             "persistent": not ephemeral,
+            "volume_mount": str(volume) if volume else None,
+            "participant_count": len(get_all_study_ids()),
         }
 
     @app.route("/brochure")
@@ -233,6 +237,7 @@ def create_app() -> Flask:
             review_emails=get_review_emails(),
             storage_ephemeral=database_is_ephemeral(),
             database_path=str(database_path()),
+            participant_count=len(get_all_study_ids()),
             closed_records=_enrich_outcome_records(
                 get_closed_touchpoint_records(outcome=filter_outcome)
             ),
@@ -292,6 +297,15 @@ def create_app() -> Flask:
             )
         else:
             flash("No matching HAI emails found in Gmail.", "info")
+
+        if database_is_ephemeral():
+            flash(
+                "These records are on temporary disk and will disappear when the "
+                "app restarts or redeploys. In Railway: web service → Volumes → "
+                "Add Volume, mount path /data. Set "
+                "TRACKER_DATABASE_PATH=/data/tracker.db on web and cron.",
+                "warning",
+            )
 
         return redirect(url_for("index"))
 

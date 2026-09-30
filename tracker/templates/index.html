@@ -193,10 +193,14 @@
 
   {% if storage_ephemeral %}
   <div class="flash error">
-    Records are stored on an ephemeral disk and will be wiped on the next deploy.
-    In Railway: add a volume mounted at <code>/data</code> on the web and cron
-    services, set <code>TRACKER_DATABASE_PATH=/data/tracker.db</code>, then redeploy.
+    <strong>Records disappear when this app restarts or redeploys.</strong>
+    Railway’s disk is temporary until a volume is attached.
+    Open the <strong>web</strong> service → <strong>Volumes</strong> →
+    <strong>Add Volume</strong> with mount path <code>/data</code>.
+    Set <code>TRACKER_DATABASE_PATH=/data/tracker.db</code> on web and cron,
+    then redeploy.
     Current database: <code>{{ database_path }}</code>
+    ({{ participant_count }} participant{% if participant_count != 1 %}s{% endif %} stored now).
   </div>
   {% endif %}
 

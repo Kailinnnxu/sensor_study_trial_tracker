@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from unittest import mock
 
 import pytest
+from googleapiclient.errors import HttpError
 
 from tracker.gmail_secrets import GmailAuthError, overwrite_token_from_env
-from tracker.ingestion.gmail_client import get_gmail_service
+from tracker.ingestion.gmail_client import (
+    GmailRateLimitError,
+    fetch_messages_by_ids,
+    fetch_recent_messages,
+    get_gmail_service,
+)
 
 
 def _dead_creds() -> mock.Mock:
@@ -149,3 +156,117 @@ class TestOverwriteTokenFromEnv:
 
         assert overwrite_token_from_env() is False
         assert not token_path.exists()
+
+
+def _http_error(status: int = 403, reason: str = "rateLimitExceeded") -> HttpError:
+    resp = mock.Mock()
+    resp.status = status
+    payload = {
+        "error": {
+            "errors": [
+                {
+                    "reason": reason,
+                    "message": "Quota exceeded for quota metric 'Total Query Cost'",
+                }
+            ]
+        }
+    }
+    return HttpError(resp, json.dumps(payload).encode())
+
+
+def _message_payload(message_id: str) -> dict:
+    return {
+        "id": message_id,
+        "internalDate": "1710000000000",
+        "payload": {
+            "headers": [
+                {"name": "From", "value": "hai@hsl.harvard.edu"},
+                {"name": "Subject", "value": "HAI Y1 Visit Completed"},
+            ],
+            "mimeType": "text/plain",
+            "body": {"data": ""},
+        },
+    }
+
+
+class TestGmailRateLimit:
+    def test_retries_then_succeeds(self, monkeypatch):
+        monkeypatch.setattr("tracker.ingestion.gmail_client.time.sleep", lambda *_a, **_k: None)
+        request = mock.Mock()
+        request.execute.side_effect = [
+            _http_error(),
+            _message_payload("m1"),
+        ]
+        service = mock.Mock()
+        service.users.return_value.messages.return_value.get.return_value = request
+
+        messages = fetch_messages_by_ids(["m1"], service=service)
+        assert [m.message_id for m in messages] == ["m1"]
+        assert request.execute.call_count == 2
+
+    def test_raises_clear_error_after_retries(self, monkeypatch):
+        monkeypatch.setattr("tracker.ingestion.gmail_client.time.sleep", lambda *_a, **_k: None)
+        request = mock.Mock()
+        request.execute.side_effect = _http_error()
+        service = mock.Mock()
+        service.users.return_value.messages.return_value.get.return_value = request
+
+        with pytest.raises(GmailRateLimitError, match="rate limit"):
+            fetch_messages_by_ids(["m1"], service=service)
+        assert request.execute.call_count == 5
+
+    def test_returns_partial_results_when_later_get_is_rate_limited(self, monkeypatch):
+        monkeypatch.setattr("tracker.ingestion.gmail_client.time.sleep", lambda *_a, **_k: None)
+
+        def get_request(*, userId, id, format):
+            request = mock.Mock()
+            if id == "m1":
+                request.execute.return_value = _message_payload("m1")
+            else:
+                request.execute.side_effect = _http_error()
+            return request
+
+        service = mock.Mock()
+        service.users.return_value.messages.return_value.get.side_effect = (
+            lambda **kwargs: get_request(**kwargs)
+        )
+
+        messages = fetch_messages_by_ids(["m1", "m2"], service=service)
+        assert [m.message_id for m in messages] == ["m1"]
+
+    def test_fetch_skips_already_ingested_ids(self, monkeypatch):
+        list_req = mock.Mock()
+        list_req.execute.return_value = {"messages": [{"id": "old"}, {"id": "new"}]}
+        get_req = mock.Mock()
+        get_req.execute.return_value = _message_payload("new")
+        service = mock.Mock()
+        messages_api = service.users.return_value.messages.return_value
+        messages_api.list.return_value = list_req
+        messages_api.get.return_value = get_req
+        monkeypatch.setattr(
+            "tracker.ingestion.gmail_client.get_gmail_service", lambda: service
+        )
+
+        messages = fetch_recent_messages(skip_ids={"old"})
+        assert [m.message_id for m in messages] == ["new"]
+        messages_api.get.assert_called_once_with(userId="me", id="new", format="full")
+
+    def test_list_paginates_when_uncapped(self):
+        from tracker.ingestion.gmail_client import list_recent_message_ids
+
+        list_req_one = mock.Mock()
+        list_req_one.execute.return_value = {
+            "messages": [{"id": "a"}],
+            "nextPageToken": "page2",
+        }
+        list_req_two = mock.Mock()
+        list_req_two.execute.return_value = {"messages": [{"id": "b"}]}
+        service = mock.Mock()
+        list_api = service.users.return_value.messages.return_value.list
+        list_api.side_effect = [list_req_one, list_req_two]
+
+        ids = list_recent_message_ids(max_results=None, query="from:x", service=service)
+        assert ids == ["a", "b"]
+        assert list_api.call_args_list[0].kwargs["maxResults"] == 500
+        assert list_api.call_args_list[1].kwargs["pageToken"] == "page2"
+

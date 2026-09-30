@@ -35,14 +35,16 @@ After deploy, note your public URL (e.g. `https://sensor-tracker.up.railway.app`
 
 ---
 
-## Step 4 — Add a persistent volume
+## Step 4 — Add a persistent volume (required)
+
+Without a volume, **every restart, refresh, or redeploy wipes the participant database.** Fetching email again cannot restore old statuses.
 
 1. Open the **web** service → **Volumes** → **Add Volume**
 2. Mount path: `/data`
+3. Set `TRACKER_DATABASE_PATH=/data/tracker.db` on **web and cron**
+4. Attach the **same volume** to the cron service
 
-Attach the **same volume** to the cron service later.
-
-Without a volume, the SQLite database and Gmail token are lost on every redeploy.
+Railway will restart the service when the volume is added. Fetch emails once after that; those records will then survive later deploys.
 
 ---
 
@@ -135,7 +137,7 @@ You do **not** run the browser OAuth flow on Railway.
 
 | Problem | Fix |
 |---------|-----|
-| Database resets on deploy | Mount a volume at `/data` on **web and cron**, set `TRACKER_DATABASE_PATH=/data/tracker.db`. Fetch does not delete history; a missing volume does. |
+| Database resets on refresh/deploy | The app has no volume. Mount `/data` on **web and cron**, set `TRACKER_DATABASE_PATH=/data/tracker.db`. Fetch does not delete history; a missing volume does. Confirm `/health` shows `"persistent": true`. |
 | `Gmail credentials not found` | Set `GMAIL_CREDENTIALS_B64` |
 | Token expired / auth errors | Re-run export script after local OAuth refresh |
 | Cron never runs | Confirm cron schedule on cron service, not web service |

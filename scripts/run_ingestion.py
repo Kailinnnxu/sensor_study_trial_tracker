@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from datetime import date
 from pathlib import Path
 
 # Allow running from scripts/ without installing the package.
@@ -22,7 +23,18 @@ from tracker.ingestion.run import run_ingestion
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ingest anchor events from Gmail")
     parser.add_argument("--dry-run", action="store_true", help="Parse only; do not write")
-    parser.add_argument("--max-results", type=int, default=100)
+    parser.add_argument(
+        "--since",
+        metavar="YYYY-MM-DD",
+        help="Inclusive start date. Lists every matching Gmail page from this day "
+        "(use for a 2026 backfill). Daily cron should omit this.",
+    )
+    parser.add_argument(
+        "--max-results",
+        type=int,
+        default=None,
+        help="Cap how many Gmail IDs to list. Default 100, or no cap when --since is set.",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -31,8 +43,18 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
+    since = date.fromisoformat(args.since) if args.since else None
+    if args.max_results is not None:
+        max_results = args.max_results
+    elif since is not None:
+        max_results = None
+    else:
+        max_results = 100
+
     init_db()
-    stats = run_ingestion(dry_run=args.dry_run, max_results=args.max_results)
+    stats = run_ingestion(
+        dry_run=args.dry_run, max_results=max_results, since=since
+    )
     logging.info(
         "Ingestion complete: ingested=%d dates_updated=%d backfilled=%d flagged=%d skipped=%d processed=%d",
         stats.ingested,

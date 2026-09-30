@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from tracker.config import INGESTION_SOURCES, IngestionSource, get_touchpoints_for_event_type
 from tracker.db import (
@@ -16,7 +16,11 @@ from tracker.db import (
     reconcile_anchor_event_date,
     upsert_anchor_event,
 )
-from tracker.ingestion.gmail_client import EmailMessage, fetch_recent_messages
+from tracker.ingestion.gmail_client import (
+    EmailMessage,
+    fetch_messages_by_ids,
+    list_recent_message_ids,
+)
 from tracker.ingestion.parsers import ParseError, ParseResult, parse_body
 
 logger = logging.getLogger(__name__)
@@ -205,14 +209,54 @@ def process_email(email: EmailMessage, *, dry_run: bool = False) -> str:
     return "ingested"
 
 
-def run_ingestion(*, dry_run: bool = False, max_results: int = 100) -> IngestionStats:
-    """Fetch recent Gmail messages and ingest matching emails."""
-    stats = IngestionStats()
+def _gmail_search_query(*, since: date | None = None) -> str:
     senders = {s.sender for s in INGESTION_SOURCES}
-    query = " OR ".join(f"from:{sender}" for sender in senders)
+    sender_clause = " OR ".join(f"from:{sender}" for sender in senders)
+    if len(senders) > 1:
+        sender_clause = f"({sender_clause})"
+    if since is None:
+        return sender_clause
+    # Gmail `after:YYYY/MM/DD` is exclusive of that day, so step back one date
+    # to include `since` itself.
+    exclusive = since - timedelta(days=1)
+    return f"after:{exclusive:%Y/%m/%d} {sender_clause}"
 
-    emails = fetch_recent_messages(max_results=max_results, query=query)
-    logger.info("Fetched %d messages from Gmail", len(emails))
+
+def run_ingestion(
+    *,
+    dry_run: bool = False,
+    max_results: int | None = 100,
+    since: date | None = None,
+) -> IngestionStats:
+    """Fetch Gmail messages and ingest matching emails.
+
+    Daily use keeps ``max_results=100`` (newest matching mail). For a full
+    backfill pass ``since=`` (inclusive) and ``max_results=None`` so every
+    matching page is listed; already-ingested IDs are skipped.
+    """
+    stats = IngestionStats()
+    query = _gmail_search_query(since=since)
+
+    message_ids = list_recent_message_ids(max_results=max_results, query=query)
+    logger.info(
+        "Gmail listed %d message id(s) (query=%r cap=%s)",
+        len(message_ids),
+        query,
+        max_results if max_results is not None else "none",
+    )
+    to_fetch: list[str] = []
+    for message_id in message_ids:
+        if is_email_processed(message_id):
+            stats.skipped_already_processed += 1
+            continue
+        to_fetch.append(message_id)
+
+    emails = fetch_messages_by_ids(to_fetch)
+    logger.info(
+        "Fetched %d new Gmail messages (%d already ingested)",
+        len(emails),
+        stats.skipped_already_processed,
+    )
 
     pending: list[EmailMessage] = []
     processed: list[EmailMessage] = []

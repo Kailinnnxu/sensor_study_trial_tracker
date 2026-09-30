@@ -5,3 +5,5 @@ builder = "NIXPACKS"
 healthcheckPath = "/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
+# SQLite cannot be written by overlapping old/new containers on one volume.
+overlapSeconds = 0
